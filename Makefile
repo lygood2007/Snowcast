@@ -6,7 +6,7 @@ LDFLAGS = -lpthread
 all: snowcast_listener snowcast_control snowcast_server
 
 snowcast_listener: snowcast_listener.c
-snowcast_control:  snowcast_control.c extrafile1.c extrafile2.c
-snowcast_server:   snowcast_server.c extrafile3.c extrafile4.c
+snowcast_control:  snowcast_control.c
+snowcast_server:   snowcast_server.c
 clean:
 	rm -f snowcast_listener snowcast_control snowcast_server
