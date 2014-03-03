@@ -1,3 +1,6 @@
+// Macro for debug
+#define DEBUG
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -14,19 +17,28 @@
 
 /* defines */
 #define BACKLOG 10   // how many pending connections queue will hold
-#define MAX_SONGS 10 // max songs
+#define BUF_SIZE 256 // 256 bytes
 
 /* global variables */
-uint8_t reply_type;
-uint16_t num_stations;
-uint8_t songname_size;
-uint8_t replystring_size;
+struct Welcome
+{
+    uint8_t reply_type;
+    uint16_t num_stations;
+};
 
-const char* songname = NULL;
-const char* replystring = NULL;
-const char* tcpport = NULL; // port
-const char* server_name = NULL; // server name, ip
-const char* files[MAX_SONGS] = {NULL};
+struct Announce
+{
+    uint8_t reply_type;
+    uint8_t songname_size;
+    char* song_name;
+};
+
+struct InvalidCommand
+{
+    uint8_t reply_type;
+    uint8_t reply_string_size;
+    char* reply_string;
+};
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -37,14 +49,14 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-// usage
-void usage()
-{
-	fprintf(stdout, "snowcast_server tcpport file1 file2 ...\n");
-}
-
-// send message
-int sendall(int s, char *buf, int *len)
+/*
+ send_all: send the message in multiple passes.
+ @return: -1 for failure, 0 for success.
+ @param s: the socket.
+ @param buf: the buffer.
+ @param len: the length of the buffer sent.
+ */
+int send_all(int s, char *buf, int *len)
 {
     int total = 0;        // how many bytes we've sent
     int bytesleft = *len; // how many we have left to send
@@ -63,61 +75,54 @@ int sendall(int s, char *buf, int *len)
     return n == -1?-1:0; // return -1 on failure, 0 on success
 }
 
-int main(int argc, char* argv[])
+// TODO
+void play_song()
 {
-	if(argc < 2)
-	{
-		usage();
-		exit(1);
-	}
-	else
-	{
-		tcpport = argv[1];
-		for(int i = 2; i < argc&& i < MAX_SONGS; i++)
-		{
-			files[i-2] = argv[i];
-		}
-	}
-    fd_set master;    // master file descriptor list
-    fd_set read_fds;  // temp file descriptor list for select()
-	int fdmax;
-	int listener;
-	int newfd;
-	struct sockaddr_storage remoteaddr; // client address
-	socklen_t addrlen;
-	char buf[256];    // buffer for client data
-	int nbytes;
-	int ret;
-	char remoteIP[INET6_ADDRSTRLEN];
+    
+}
 
-	int i, rv;
-	struct addrinfo hints, *ai, *p;
-	FD_ZERO(&master);    // clear the master and temp sets
-	FD_ZERO(&read_fds); // clear the read file descriptors
+// STREAM SONG
+void stream_song()
+{
+    
+}
 
-	memset(&hints, 0, sizeof hints);
+/*
+ init_listen: initialize the socket.
+ @return: -1 for failure, 0 for success.
+ @param tcp_port: the port for tcp.
+ @param buf: the buffer.
+ @param len: the length of the buffer sent.
+ */
+int init_listen(const char* tcp_port, const char* server_name)
+{
+    struct addrinfo hints, *ai, *p;
+    int rv;
+    int sockfd;
+    
+    memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
-	if ((rv = getaddrinfo(NULL, tcpport, &hints, &ai)) != 0) 
+	if ((rv = getaddrinfo(server_name, tcp_port, &hints, &ai)) != 0)
 	{
 		fprintf(stderr, "snowcast_server: %s\n", gai_strerror(rv));
-		exit(1);
+		return -1;
 	}
-
+    
 	// search for the services
-	for(p = ai; p != NULL; p = p->ai_next) 
+	for(p = ai; p != NULL; p = p->ai_next)
 	{
-		listener = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-		if (listener < 0) // connot listen
-		{ 
+		sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+		if (sockfd < 0) // connot listen
+		{
 			continue;
 		}
-
-		if (bind(listener, p->ai_addr, p->ai_addrlen) < 0)
+        
+		if (bind(sockfd, p->ai_addr, p->ai_addrlen) < 0)
 		{ // if failed we just close the socket
-			close(listener);
-			continue; 
+			close(sockfd);
+			continue;
 		}
 		break;
 	}
@@ -125,65 +130,85 @@ int main(int argc, char* argv[])
 	if (p == NULL)
 	{
 		fprintf(stderr, "snowcast_server: failed to bind\n");
-		exit(1);
+		return -1;
 	}
 	freeaddrinfo(ai); // all done with this
-    // listen
-	if (listen(listener, BACKLOG) == -1) {
-		perror("listen");
-		exit(1);
-	}
-    // add the listener to the master set
-	FD_SET(listener, &master);
-    // keep track of the biggest file descriptor
-	fdmax = listener; // so far, it's this one
+    return sockfd;
+}
 
+/*
+ server_listen: the main loop for server.
+ @return: -1 for failure, 0 for success.
+ @param sockfd: the socket.
+ */
+int server_listen(int sockfd)
+{
+    int i;
+    int ret;
+    int fdmax;
+    fd_set master;    // master file descriptor list
+    fd_set read_fds;  // temp file descriptor list for select()
+    struct sockaddr_storage remoteaddr; // client address
+	socklen_t addrlen;
+    char buf[BUF_SIZE];
+    char remoteIP[INET6_ADDRSTRLEN];
+    
+    FD_ZERO(&master);    // clear the master and temp sets
+	FD_ZERO(&read_fds); // clear the read file descriptors
+    
+    // add the listener to the master set
+	FD_SET(sockfd, &master);
+    // keep track of the biggest file descriptor
+	fdmax = sockfd; // so far, it's this one
+    
 	while(1) {
 		read_fds = master; // copy it. the reason is that we need to reset the set once we do select.
 		if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1)
 		{
 			perror("select");
-			exit(1);
+			return -1;
 		}
 		// run through the existing connections looking for data to read
-		for(i = 0; i <= fdmax; i++) 
+		for(i = 0; i <= fdmax; i++)
 		{
-			if (FD_ISSET(i, &read_fds)) 
+			if (FD_ISSET(i, &read_fds))
 			{ // we got one!!
-				if (i == listener)
+				if (i == sockfd)
 				{
 					// handle new connections
 					addrlen = sizeof(remoteaddr);
-					newfd = accept(listener,
+					int newfd = accept(sockfd,
 								   (struct sockaddr *)&remoteaddr,
 								   &addrlen);
-					if (newfd == -1) 
+					if (newfd == -1)
 					{
 						perror("accept");
+                        return -1;
 					} else
 					{
 						FD_SET(newfd, &master); // add to master set
-						if (newfd > fdmax) 
+						if (newfd > fdmax)
 						{    // keep track of the max
 							fdmax = newfd;
 						}
-						fprintf(stdout,"snowcast: new connection from %s on "
-							   "socket %d\n",
-							   inet_ntop(remoteaddr.ss_family,
-										 get_in_addr((struct sockaddr*)&remoteaddr),
-										 remoteIP, INET6_ADDRSTRLEN),newfd); 
+						fprintf(stdout,"snowcast_server: new connection from %s on "
+                                "socket %d\n",
+                                inet_ntop(remoteaddr.ss_family,
+                                          get_in_addr((struct sockaddr*)&remoteaddr),
+                                          remoteIP, INET6_ADDRSTRLEN),newfd);
 					}
-				} else 
+				} else
 				{
+                    int nbytes;
 					// else handle data from a client
-					if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0) 
+					if ((nbytes = recv(i, buf, sizeof buf, 0)) <= 0)
 					{
 						// got error or connection closed by client
-						if (nbytes == 0) 
+						if (nbytes == 0)
 						{
 							// connection closed
                             fprintf(stdout,"snowcast_server: socket %d hung up\n", i);
-                        } else 
+                        } else
 						{
                             perror("recv");
                         }
@@ -193,9 +218,9 @@ int main(int argc, char* argv[])
 					else // send to parser
 					{
 						// print out the data from client
-						fprintf(stderr, buf);
+						fprintf(stdout, buf);
 						int len = strlen("welcome");
-						if((ret = sendall(i, "welcome", &len)) < 0)
+						if((ret = send_all(i, "welcome", &len)) < 0)
 						{
 							perror("send");
 						}
@@ -204,5 +229,56 @@ int main(int argc, char* argv[])
             }
         }
     }
+}
+
+// usage
+void usage()
+{
+	fprintf(stderr, "snowcast_server tcpport file1 file2 ...\n");
+}
+
+int main(int argc, char* argv[])
+{
+    const char** file_name;
+    const char* tcp_port;
+	if(argc < 2)
+	{
+		usage();
+		exit(1);
+	}
+	else
+	{
+		tcp_port = argv[1];
+		file_name = (char**)malloc(sizeof(char*)*(argc-2));
+        if(file_name == NULL)
+        {
+            fprintf(stderr, "No spaces for heap.\n");
+            exit(1);
+        }
+        for(int i = 2; i < argc; i++)
+		{
+			file_name[i-2] = argv[i];
+		}
+	}
+
+    int socket;
+    
+    if((socket = init_listen(tcp_port, NULL)) < 0)
+    {
+        fprintf(stderr, "error binding socket.\n");
+        exit(1);
+    }
+    
+    // Start to listen
+    if (listen(socket, BACKLOG) == -1) {
+		perror("listen");
+    }
+    
+    if(server_listen(socket) == -1)
+    {
+        fprintf(stderr, "error in server.");
+        exit(1);
+    }
+    close(socket);
 	return 0;
 }
