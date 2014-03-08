@@ -46,13 +46,13 @@ void* receive(void* sockets)
             perror("recvfrom");
             exit(1);
         }
-        fprintf(stderr, "listener: got packet from %s\n",
+        fprintf(stderr, "Listener: got packet from %s\n",
                inet_ntop(their_addr.ss_family,
                          get_in_addr((struct sockaddr *)&their_addr),
                          ip_addr, sizeof ip_addr));
-        fprintf(stderr, "listener: packet is %d bytes long\n",nbytes);
+        fprintf(stderr, "Listener: packet is %d bytes long\n",nbytes);
         buf[nbytes] = '\0';
-        fprintf(stderr, "listener: packet contains \"%s\"\n", buf);
+        fprintf(stderr, "Listener: packet contains \"%s\"\n", buf);
         // output to stdout
         if(write(STDOUT_FILENO, buf, nbytes) != nbytes)
         {
@@ -78,30 +78,30 @@ int open_connection(const char* udp_port)
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_flags = AI_PASSIVE; // use my IP
     if ((rv = getaddrinfo(NULL, udp_port, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        fprintf(stderr, "Getaddrinfo: %s\n", gai_strerror(rv));
         return -1;
     }
     // loop through all the results and bind to the first we can
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((sockfd = socket(p->ai_family, p->ai_socktype,
                              p->ai_protocol)) == -1) {
-            perror("listener: socket");
+            perror("socket");
             continue;
         }
         if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             close(sockfd);
-            perror("listener: bind");
+            perror("bind");
             continue;
         }
         break;
     }
     if (p == NULL) {
-        fprintf(stderr, "listener: failed to bind socket\n");
+        fprintf(stderr, "Listener: failed to bind socket\n");
         return -1;
     }
     freeaddrinfo(servinfo);
     
-    fprintf(stderr, "listener: waiting to recv stream...\n");
+    fprintf(stderr, "Listener: waiting to recv stream...\n");
     return sockfd;
 }
 //usage
@@ -126,7 +126,7 @@ int main(int argc, char* argv[])
     }
     if((sockfd = open_connection(udp_port)) == -1)
     {
-        fprintf(stderr, "error in binding the socket.\n");
+        fprintf(stderr, "Error in binding the socket.\n");
         exit(1);
     }
 
