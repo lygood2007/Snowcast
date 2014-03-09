@@ -29,13 +29,13 @@
 #define ANNOUNCE 1
 #define INVALID 2
 
-/* global variables */
+#define MAX_STATION_NUM 30
+
 typedef struct Control
 {
-    uint8_t command_type;
+    uint8_t cmd;
     uint16_t info;
 }Control_t;
-
 typedef struct Welcome
 {
     uint8_t reply_type;
@@ -56,23 +56,36 @@ typedef struct InvalidCommand
     char* reply_string;
 }InvalidCommand_t;
 
+typedef struct Station
+{
+    char* cur_song;
+}Station_t;
+
 typedef struct ServerInfo
 {
     int cur_station;
     // to be added..
 }ServerInfo_t;
 
+typedef enum State
+{
+    NO_STATE,
+    INIT_STATE,
+    HANDSHAKED
+}State_t;
+
 typedef struct ClientInfo
 {
-    int state; // state, 0 for idle, 1 for active
+    State_t state;
     int socket;
     const char* ip_address;
+    uint16_t udp_port;
     // to be added
 }ClientInfo_t;
 
 ServerInfo_t server;
 ClientInfo_t clients[MAX_CLIENT_NUM];
-
+Station_t stations[1]; // for testing now
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -115,7 +128,7 @@ void play_song()
     
 }
 
-// STREAM SONG
+// TODO
 void stream_song()
 {
     
@@ -151,7 +164,7 @@ int find_first_client()
     int i;
     for(i = 0; i < MAX_CLIENT_NUM;i++)
     {
-        if(clients[i].state == 0)
+        if(clients[i].state == NO_STATE)
             return i;
     }
     return -1;
@@ -241,52 +254,145 @@ int init_listen(const char* tcp_port, const char* server_name)
 }
 
 /*
- parse_and_send: parse the client and then send back feedback if necessary
+ init_stations: TODO
+ */
+void init_stations()
+{
+    stations[0].cur_song = "LALALA";
+}
+/*
+ send_invalid_command: send the invalid command to one client
  @return: if succeed, return 0, else return -1
  @param s: the socket
- @parem buf: the buffer from user input
+ @parem err_message: the error message
+ */
+int send_invalid_command(int s, const char* err_message)
+{
+    InvalidCommand_t invalid;
+    invalid.reply_type = INVALID;
+    invalid.reply_string_size = (uint8_t)(strlen(err_message));
+    invalid.reply_string = err_message;
+    
+    int len =sizeof(uint8_t)*2+ strlen(err_message);
+    char* buf = (char*)malloc(sizeof(uint8_t)*2+ strlen(err_message));
+    char* rbuf = buf;
+    memcpy(buf, &invalid.reply_type, sizeof(uint8_t));
+    buf++;
+    memcpy(buf, &invalid.reply_string_size, sizeof(uint8_t));
+    buf++;
+    memcpy(buf, err_message, strlen(err_message));
+    
+    if(send_all(s, rbuf, &len) == -1)
+    {
+        perror("send");
+    }
+    free(rbuf);
+    return 0;
+}
+
+/*
+ send_welcome: send welcome package to one client
+ @return: if succeed, return 0, else return -1
+ @param s: the socket
+ @return: 0 for success and -1 for failure
+ */
+int send_welcome(int s)
+{
+    int bytes = sizeof(uint8_t) + sizeof(uint16_t);
+    int len = bytes;
+    
+    char* buf = malloc(sizeof(uint16_t) + sizeof(uint8_t));
+    char* rbuf = buf;
+    memset(buf, 0, sizeof(uint16_t) + sizeof(uint8_t));
+    *buf = WELCOME;
+    
+    if(send_all(s, rbuf, &len) == -1)
+    {
+        return -1;
+    }
+    free(rbuf);
+    return 0;
+}
+
+/*
+ send_announce: send announce package to one client
+ */
+// TODO
+int send_announce(int s, const char* buf)
+{
+    /*Announce_t an = {(uint8_t)(WELCOME), (uint16_t)(0)};
+    int len = sizeof(Welcome_t);
+    if((send_all(s, &wel, &len)))
+    {
+        perror("send");
+        return -1;
+    }*/
+    return 0;
+}
+
+/*
+ parse_and_send: parse the input from client and send reply to clients
+ @return: 0 for success, 1 for error
+ @param s: the socket
+ @param buf: the buffer
  */
 int parse_and_send(int s, const char* buf)
 {
+    //fflush(stdout);
+    //fflush(stderr);
 #ifdef DEBUG
-    fprintf(stdout, "Client data: %s", buf);
+    //fprintf(stderr, "Client data: %s\n", buf);
 #endif
     // Do nothing if the buffer is empty
     if(buf == NULL)
         return 0;
     
-    struct Control control;
-    control = (*(struct Control*)buf);
-    if(control.command_type == HELLO_CMD)
+    uint8_t cmd = *((uint8_t*)buf);
+    Control_t td;
+    
+    buf++;
+    if(cmd == HELLO_CMD)
     {
+       // Control_t *b = (Control_t*)buf;
+        // set port number
+        uint16_t* tmp = (uint16_t*)buf;
+      // uint16_t port = b->info;
+        uint16_t port = (uint16_t)ntohs(*tmp);
+       int index = find_client(s);
 #ifdef DEBUG
-        fprintf(stdout, "I get hello from socket %d.\n", s);
+        fprintf(stderr, "I get hello from socket %d, udp_port:%d.\n", s,port);
 #endif
-        // send welcome
-        /*const char* welcome = "welcome";
-        int len = strlen("welcome");
-        if((send_all(s, "welcome", &len)) < 0)
+        
+        if(clients[index].state == HANDSHAKED)
         {
-            perror("send");
-            return -1;
-        }*/
-        Welcome_t wel = {(uint8_t)(WELCOME), (uint16_t)(0)};
-        int len = sizeof(Welcome_t);
-        if((send_all(s, &wel, &len)))
+            fprintf(stderr, "Already hand shaked\n");
+            if(send_invalid_command(s, "already handshaked.") == -1)
+            {
+                return -1;
+            }
+        }else
         {
-            perror("send");
-            return -1;
+            //int index = find_client(s);
+            clients[index].udp_port = port;
+
+            // send welcome
+            if(send_welcome(s) == -1)
+            {
+                return -1;
+            }
+            else
+                clients[find_client(s)].state = HANDSHAKED;
         }
-        
-    }else if(control.command_type == SETSTATION_CMD)
+    }else if(cmd == SETSTATION_CMD)
     {
-        // set station number
-#ifdef DEBUG
-        fprintf(stdout, "I get SetStation from socket %d.\n", s);
-#endif
         
+#ifdef DEBUG
+        fprintf(stderr, "I get SetStation from socket %d.\n", s);
+#endif
+    
     }
     return 0;
+  //  return 0;
 }
 /*
  server_listen: the main loop for server.
@@ -367,7 +473,7 @@ int server_listen(int sockfd)
                         }else
                         {
                             /* We get a new client, push it into clientinfo */
-                            clients[first].state = 1;
+                            clients[first].state = INIT_STATE;
                             clients[first].socket = newfd;
                             clients[first].ip_address = inet_ntop(remoteaddr.ss_family,
                                                                 get_in_addr((struct sockaddr*)&remoteaddr),
@@ -381,8 +487,9 @@ int server_listen(int sockfd)
 				} else
 				{
                     int nbytes;
+                    memset(buf,0,BUF_SIZE);
 					// else handle data from a client
-					if ((nbytes = recv(i, buf, sizeof(struct Control), 0)) <= 0)
+					if ((nbytes = recv(i, buf, sizeof(uint8_t) + sizeof(uint16_t), 0)) <= 0)
 					{
                         int index = find_client(i);
 						// got error or connection closed by client
@@ -402,13 +509,6 @@ int server_listen(int sockfd)
                     }
 					else // send to parser
 					{
-						// print out the data from client
-						/*fprintf(stdout, buf);
-						int len = strlen("welcome");
-						if((ret = send_all(i, "welcome", &len)) < 0)
-						{
-							perror("send");
-						}*/
                         parse_and_send(i, buf);
 					}
                 }
@@ -457,6 +557,7 @@ int main(int argc, char* argv[])
     
     init_server_locl();
     init_clients_info();
+    init_stations();
     
     if(server_listen(socket) == -1)
     {

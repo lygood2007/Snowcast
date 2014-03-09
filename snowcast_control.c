@@ -47,11 +47,6 @@ typedef struct ReqPlayList
     uint8_t command;
 }ReqPlayList_t;
 
-typedef struct Reply
-{
-    uint8_t command_type;
-    uint16_t info;
-}Reply_t;
 
 /* global variables for thread id */
 pthread_t sender;
@@ -73,11 +68,32 @@ void *get_in_addr(struct sockaddr *sa)
 }
 
 /*
- TODO
+ send_set_station: send the set_station command to server
+ @return: 0 for success and -1 for failure
+ @param s: socket
+ @param station: the station number
  */
 int send_set_station(int s, const char* station)
 {
-    return 1;
+    uint16_t station_num = (uint16_t)atoi(station);
+    station_num = htons(station_num);
+    SetStation_t set_station = {SETSTATION_CMD, station_num};
+    //fprintf(stderr, "prepared to send\n");
+
+    
+    pthread_mutex_lock(&queue_mutex);
+    command_queue_enqueue(&cmd_queue, SETSTATION_CMD);
+    
+    pthread_mutex_unlock(&queue_mutex);
+    
+    int len = sizeof(uint8_t) + sizeof(uint16_t);
+    //fprintf(stderr, "prepared to send\n");
+    if(send_all(s, &set_station, &len) == -1)
+    {
+        return -1;
+    }
+
+    return 0;
 }
 
 /*
@@ -88,30 +104,34 @@ int send_set_station(int s, const char* station)
  @param len: the length of the buffer sent.
  */
 int send_hello(int s, const char* udp_port){
-    
     assert(s>0);
     if(udp_port == NULL || strlen(udp_port) == 0)
         return -1;
     
     uint16_t udp_port_16 = (uint16_t)atoi(udp_port);
     udp_port_16 = (uint16_t)(htons(udp_port_16));
+   // fprintf(stderr, "udport:%d\n",udp_port_16);
     // the package
-    Hello_t h = {htons(HELLO_CMD), udp_port_16};
     
     // send bytes
-    int len = sizeof(h);
+    int len = sizeof(uint8_t) + sizeof(uint16_t);
     
     pthread_mutex_lock(&queue_mutex);
     command_queue_enqueue(&cmd_queue, HELLO_CMD);
 
     pthread_mutex_unlock(&queue_mutex);
-
-    if(send_all(s, &h, &len) == -1)
+    char* buf = malloc(sizeof(uint16_t) + sizeof(uint8_t));
+    char* rbuf = buf;
+    memset(buf, 0, sizeof(uint16_t) + sizeof(uint8_t));
+    *buf = HELLO_CMD;
+    buf++;
+    memcpy(buf, &udp_port_16,sizeof(uint16_t));
+    if(send_all(s, rbuf, &len) == -1)
     {
         return -1;
     }
+    free(rbuf);
     
-        
     return 0;
 }
 
@@ -141,16 +161,7 @@ int send_all(int s, const char *buf, int *len)
     return n == -1?-1:0; // return -1 on failure, 0 on success
 }
 
-/*
- command_usage: list the usage of clients to server commands
- */
 
-void command_usage()
-{
-    fprintf(stdout, "Commands:\n");
-    fprintf(stdout, "Set [station number]\n");
-    fprintf(stdout, "Exit\n");
-}
 /*
  parse_and_send: parse the user input and then send
  @return: if succeed, return 0, else return -1
@@ -165,7 +176,6 @@ int parse_and_send(int s, const char* buf)
     char * pch;
     pch = strtok (buf," \t");
     char* tokens[MAX_TOKENS];
-    
     int num = 0;
     while (pch != NULL)
     {
@@ -174,65 +184,103 @@ int parse_and_send(int s, const char* buf)
         tokens[num++] = pch;
         pch = strtok (NULL, " \t");
     }
-    
     if(num == 0)
     {
         return 0;
     }else if(num == 1)
     {
-        if(strncmp(tokens[0], "Exit",4))
+        if(strncmp(tokens[0], "Exit",4) == 0)
         {
             fprintf(stdout, "Thanks for using snowcast.\n");
             exit(0);
-            
         }
-    }else if(num == 2)
+        else if(strncmp(tokens[0], "Hello", 5) == 0)
+        {
+            // Only for test
+            if(send_hello(s, "5000") == -1)
+            {
+                fprintf(stderr,"send hello failed.\n" );
+            }
+            return 0;
+        }
+    }else
     {
-        if(strncmp(tokens[0], "Set",3 ))
+        if(strncmp(tokens[0], "Set",3 ) == 0)
         {
+            if(num != 2)
+            {
+                fprintf(stderr, "Ambiguous input.\n");
+                fprintf(stderr, "Set [station number]\n");
+                return -1;
+            }
+
+            if(send_set_station(s, tokens[1]) == -1)
+            {
+                fprintf(stderr, "Set station failed。\n");
+                return -1;
+            }else
+                return 0;
             
-        }else if(strncmp(tokens[0], "Req",3))
+        }else if(strncmp(tokens[0], "Req",3) == 0)
         {
-            
+            // TODO
         }
     }
-    
     fprintf(stderr, "Ambiguous input.\n");
-    command_usage();
-    
     return -1;
 }
 
 /*
  receiver_parser: parse the data coming from the server
  @param buf: the buffer
+ @param n: how many bytes there.
  */
-void receiver_parser(const char* buf)
+void receiver_parser(const char* buf, int n)
 {
     if(buf == NULL)
         return;
     
-    pthread_mutex_lock(&queue_mutex);
-    
-    uint8_t head = command_queue_head(&cmd_queue);
-    Reply_t rpy;
-    memset(&rpy, 0, sizeof(Reply_t));
-    Reply_t* rbuf = (Reply_t*)buf;
-   
-    if(rbuf->command_type == WELCOME && head == HELLO_CMD)
+    fprintf(stderr,"bytes:%d\n", n);
+    int i = 0;
+    while(i < n)
     {
-        fprintf(stdout, "Snowcast server: welcome.\n");
-       
-    command_queue_dequeue(&cmd_queue);
-    }else if(rbuf->command_type == ANNOUNCE)
-    {
-        // to be added
-    }else
-    {
-        fprintf(stdout, "Snowcast server: invalid command\n");
+        pthread_mutex_lock(&queue_mutex);
+        uint8_t head = command_queue_head(&cmd_queue);
+        uint8_t first_byte = *(uint8_t*)buf;
+        buf++;
+        i+= sizeof(uint8_t);
+        if(first_byte == WELCOME && head == HELLO_CMD)
+        {
+            fprintf(stdout, "Snowcast server: welcome.\n");
+            //i+=sizeof();
+            i+= sizeof(uint16_t);
+            buf += sizeof(uint16_t);
+            
+        }else if(first_byte == ANNOUNCE && head == SETSTATION_CMD)
+        {
+            // to be added
+            
+        }else if(first_byte == INVALID)
+        {
+            uint8_t str_size = *(uint8_t*)buf;
+            buf++;
+            i+= sizeof(uint8_t);
+            
+            char tmp[BUF_SIZE];
+            int j;
+            for(j = 0;j < str_size; j++)
+            {
+                tmp[j] = buf[j];
+            }
+            tmp[j] = '\0';
+            fprintf(stdout, "Snowcast server: %s\n",tmp);
+            buf+=str_size;
+            i+=str_size;
+        }
+        command_queue_dequeue(&cmd_queue);
+        
+        pthread_mutex_unlock(&queue_mutex);
     }
-    
-    pthread_mutex_unlock(&queue_mutex);
 }
 
 /*
@@ -256,15 +304,10 @@ void* send_message(void* sockets)
             len--;
         }
 #ifdef DEBUG
-        if(len > 0)
-            fprintf(stdout, "Buf:%s\n",buf);
+       // if(len > 0)
+      //      fprintf(stdout, "Buf:%s\n",buf);
 #endif
-        //len = strlen(buf);
-        if(send_all(sockfd, buf, &len) < 0)
-        {
-            perror("send");
-            break;
-        }
+        parse_and_send(sockfd, buf);
     }
     
     return NULL;
@@ -285,6 +328,7 @@ void* recv_message(void* sockets)
 #endif
     while(1)
     {
+        memset(buf, 0, BUF_SIZE);
         if ((numbytes = recv(sockfd, buf, BUF_SIZE-1, 0)) <= 0) {
 			// Error when receive
             if(numbytes == 0)
@@ -298,15 +342,11 @@ void* recv_message(void* sockets)
 		}
         buf[numbytes] = '\0';
 #ifdef DEBUG
-        snprintf(test_buf, BUF_SIZE-1, "Recv:%s\n",buf);
-        fprintf(stdout, test_buf);
+        /*snprintf(test_buf, BUF_SIZE-1, "Recv:%s\n",buf);
+        fprintf(stdout, test_buf);*/
 #endif
-  /*      while(!command_queue_empty(&cmd_queue))
-        {
-            fprintf(stdout, "%d\n", command_queue_dequeue(&cmd_queue));
-        }
-*/
-        receiver_parser(buf);
+        
+        receiver_parser(buf, numbytes);
     }
     return NULL;
 }
