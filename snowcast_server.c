@@ -105,6 +105,7 @@ void *get_in_addr(struct sockaddr *sa)
  */
 int send_all(int s, char *buf, int *len)
 {
+    fprintf(stderr, "bytes:%d\n",*len);
     int total = 0;        // how many bytes we've sent
     int bytesleft = *len; // how many we have left to send
     int n;
@@ -120,6 +121,37 @@ int send_all(int s, char *buf, int *len)
 	}
     *len = total; // return number actually sent here
     return n == -1?-1:0; // return -1 on failure, 0 on success
+}
+
+/*
+ read_line: read a total line from socket
+ @return: the length in bytes that have been read, or 0 for disconnection and -1 for error
+ @param fd: the file descriptor
+ @param data: the buffer
+ */
+int read_line(int fd, char data[], int maxlen)
+{
+    int len = 0;
+    while (len < maxlen)
+    {
+        char c;
+        int ret = recv(fd, &c, 1,0);
+        if(ret == 0)
+        {
+            return 0;
+        }
+        else if (ret < 0)
+        {
+             break; // error
+        }
+        if (c == '\n')
+        {
+            data[len] = 0;
+            return len; // EOF reached
+        }
+        data[len++] = c;
+    }
+    return -1;
 }
 
 // TODO
@@ -273,18 +305,23 @@ int send_invalid_command(int s, const char* err_message)
     invalid.reply_string_size = (uint8_t)(strlen(err_message));
     invalid.reply_string = err_message;
     
-    int len =sizeof(uint8_t)*2+ strlen(err_message);
-    char* buf = (char*)malloc(sizeof(uint8_t)*2+ strlen(err_message));
+    int len_str = strlen(err_message);
+    int len =sizeof(uint8_t)*2+ len_str+1;
+    char* buf = (char*)malloc(len);
     char* rbuf = buf;
     memcpy(buf, &invalid.reply_type, sizeof(uint8_t));
     buf++;
     memcpy(buf, &invalid.reply_string_size, sizeof(uint8_t));
     buf++;
-    memcpy(buf, err_message, strlen(err_message));
     
+    memcpy(buf, err_message, len_str);
+    buf+=len_str;
+    *buf = '\n';
     if(send_all(s, rbuf, &len) == -1)
     {
+        free(rbuf);
         perror("send");
+        return -1;
     }
     free(rbuf);
     return 0;
@@ -298,16 +335,20 @@ int send_invalid_command(int s, const char* err_message)
  */
 int send_welcome(int s)
 {
-    int bytes = sizeof(uint8_t) + sizeof(uint16_t);
-    int len = bytes;
+    int len = sizeof(uint8_t) + sizeof(uint16_t)+1;
     
-    char* buf = malloc(sizeof(uint16_t) + sizeof(uint8_t));
+    char* buf = malloc(len);
     char* rbuf = buf;
-    memset(buf, 0, sizeof(uint16_t) + sizeof(uint8_t));
+    memset(buf, 0, len);
     *buf = WELCOME;
+    buf++;
+    buf+=sizeof(uint16_t);
+    *buf = '\n';
     
     if(send_all(s, rbuf, &len) == -1)
     {
+        free(rbuf);
+        perror("send");
         return -1;
     }
     free(rbuf);
@@ -348,7 +389,7 @@ int parse_and_send(int s, const char* buf)
         return 0;
     
     uint8_t cmd = *((uint8_t*)buf);
-    Control_t td;
+    //Control_t td;
     
     buf++;
     if(cmd == HELLO_CMD)
@@ -365,11 +406,12 @@ int parse_and_send(int s, const char* buf)
         
         if(clients[index].state == HANDSHAKED)
         {
-            fprintf(stderr, "Already hand shaked\n");
-            if(send_invalid_command(s, "already handshaked.") == -1)
+            fprintf(stderr, "Already hand shaked.\n");
+            if(send_invalid_command(s, "Already hand shaked.") == -1)
             {
                 return -1;
             }
+            //send_welcome(s);
         }else
         {
             //int index = find_client(s);
@@ -392,7 +434,6 @@ int parse_and_send(int s, const char* buf)
     
     }
     return 0;
-  //  return 0;
 }
 /*
  server_listen: the main loop for server.
@@ -489,7 +530,9 @@ int server_listen(int sockfd)
                     int nbytes;
                     memset(buf,0,BUF_SIZE);
 					// else handle data from a client
-					if ((nbytes = recv(i, buf, sizeof(uint8_t) + sizeof(uint16_t), 0)) <= 0)
+					if (/*(nbytes = recv(i, buf, sizeof(uint8_t) + sizeof(uint16_t), 0)) <= 0*/
+                        (nbytes = read_line(i, buf, BUF_SIZE-1))<=0
+                        )
 					{
                         int index = find_client(i);
 						// got error or connection closed by client
@@ -526,6 +569,7 @@ void usage()
 int main(int argc, char* argv[])
 {
     const char** file_name;
+    //printf("%d",'\n');
     const char* tcp_port;
 	if(argc < 2)
 	{

@@ -30,6 +30,7 @@
 #define MAX_TOKENS 10
 
 /* global structure declaration */
+/*
 typedef struct Hello
 {
     uint8_t command_type;
@@ -46,7 +47,7 @@ typedef struct ReqPlayList
 {
     uint8_t command;
 }ReqPlayList_t;
-
+*/
 
 /* global variables for thread id */
 pthread_t sender;
@@ -77,7 +78,7 @@ int send_set_station(int s, const char* station)
 {
     uint16_t station_num = (uint16_t)atoi(station);
     station_num = htons(station_num);
-    SetStation_t set_station = {SETSTATION_CMD, station_num};
+    /*SetStation_t set_station = {SETSTATION_CMD, station_num};*/
     //fprintf(stderr, "prepared to send\n");
 
     
@@ -86,13 +87,26 @@ int send_set_station(int s, const char* station)
     
     pthread_mutex_unlock(&queue_mutex);
     
-    int len = sizeof(uint8_t) + sizeof(uint16_t);
+    int len = sizeof(uint8_t) + sizeof(uint16_t) + 1;
+    char* buf = malloc(len);
+    char* rbuf = buf;
+    memset(buf, 0, len);
+    *buf = SETSTATION_CMD;
+    buf++;
+    memcpy(buf, &station_num,sizeof(uint16_t));
+    buf+= sizeof(uint16_t);
+    *buf = '\n';// boundary
     //fprintf(stderr, "prepared to send\n");
-    if(send_all(s, &set_station, &len) == -1)
+    if(send_all(s, rbuf, &len) == -1)
     {
+        // Don't forget to release it
+        free(rbuf);
+        perror("send");
         return -1;
     }
-
+    // Don't forget to release it
+    free(rbuf);
+    
     return 0;
 }
 
@@ -104,30 +118,32 @@ int send_set_station(int s, const char* station)
  @param len: the length of the buffer sent.
  */
 int send_hello(int s, const char* udp_port){
-    assert(s>0);
+    assert(s > 0);
+    
     if(udp_port == NULL || strlen(udp_port) == 0)
         return -1;
     
     uint16_t udp_port_16 = (uint16_t)atoi(udp_port);
     udp_port_16 = (uint16_t)(htons(udp_port_16));
-   // fprintf(stderr, "udport:%d\n",udp_port_16);
-    // the package
-    
     // send bytes
-    int len = sizeof(uint8_t) + sizeof(uint16_t);
     
     pthread_mutex_lock(&queue_mutex);
     command_queue_enqueue(&cmd_queue, HELLO_CMD);
 
     pthread_mutex_unlock(&queue_mutex);
-    char* buf = malloc(sizeof(uint16_t) + sizeof(uint8_t));
+    int len = sizeof(uint16_t) + sizeof(uint8_t) + 1;
+    char* buf = malloc(len);
     char* rbuf = buf;
-    memset(buf, 0, sizeof(uint16_t) + sizeof(uint8_t));
+    memset(buf, 0, len);
     *buf = HELLO_CMD;
     buf++;
     memcpy(buf, &udp_port_16,sizeof(uint16_t));
+    buf+= sizeof(uint16_t);
+    *buf = '\n';// boundary
     if(send_all(s, rbuf, &len) == -1)
     {
+        free(rbuf);
+        perror("send");
         return -1;
     }
     free(rbuf);
@@ -161,6 +177,37 @@ int send_all(int s, const char *buf, int *len)
     return n == -1?-1:0; // return -1 on failure, 0 on success
 }
 
+/*
+ read_line: read a total line from socket
+ @return: the length in bytes that have been read, or 0 for disconnection and -1 for error
+ @param fd: the file descriptor
+ @param data: the buffer
+ */
+int read_line(int fd, char data[], int maxlen)
+{
+    int len = 0;
+    while (len < maxlen)
+    {
+        char c;
+        int ret = recv(fd, &c, 1,0);
+        if(ret == 0)
+        {
+            return 0;
+        }
+        else if (ret < 0)
+        {
+            break; // error
+        }
+        if (c == '\n')
+        {
+            data[len] = 0;
+            return len; // EOF reached
+        }
+        data[len++] = c;
+    }
+    
+    return -1;
+}
 
 /*
  parse_and_send: parse the user input and then send
@@ -233,54 +280,43 @@ int parse_and_send(int s, const char* buf)
 /*
  receiver_parser: parse the data coming from the server
  @param buf: the buffer
- @param n: how many bytes there.
  */
-void receiver_parser(const char* buf, int n)
+void receiver_parser(const char* buf)
 {
     if(buf == NULL)
         return;
     
-    fprintf(stderr,"bytes:%d\n", n);
-    int i = 0;
-    while(i < n)
+    //fprintf(stderr,"bytes:%d\n", n);
+    
+    pthread_mutex_lock(&queue_mutex);
+    uint8_t head = command_queue_head(&cmd_queue);
+    uint8_t first_byte = *(uint8_t*)buf;
+    buf++;
+    if(first_byte == WELCOME && head == HELLO_CMD)
     {
-        pthread_mutex_lock(&queue_mutex);
-        uint8_t head = command_queue_head(&cmd_queue);
-        uint8_t first_byte = *(uint8_t*)buf;
-        buf++;
-        i+= sizeof(uint8_t);
-        if(first_byte == WELCOME && head == HELLO_CMD)
-        {
-            fprintf(stdout, "Snowcast server: welcome.\n");
-            //i+=sizeof();
-            i+= sizeof(uint16_t);
-            buf += sizeof(uint16_t);
-            
-        }else if(first_byte == ANNOUNCE && head == SETSTATION_CMD)
-        {
-            // to be added
-            
-        }else if(first_byte == INVALID)
-        {
-            uint8_t str_size = *(uint8_t*)buf;
-            buf++;
-            i+= sizeof(uint8_t);
-            
-            char tmp[BUF_SIZE];
-            int j;
-            for(j = 0;j < str_size; j++)
-            {
-                tmp[j] = buf[j];
-            }
-            tmp[j] = '\0';
-            fprintf(stdout, "Snowcast server: %s\n",tmp);
-            buf+=str_size;
-            i+=str_size;
-        }
-        command_queue_dequeue(&cmd_queue);
+        fprintf(stdout, "Snowcast server: welcome.\n");
+    }else if(first_byte == ANNOUNCE && head == SETSTATION_CMD)
+    {
+        // to be added
         
-        pthread_mutex_unlock(&queue_mutex);
+    }else if(first_byte == INVALID)
+    {
+        uint8_t str_size = *(uint8_t*)buf;
+        buf++;
+        
+        char tmp[BUF_SIZE];
+        int j;
+        for(j = 0;j < str_size; j++)
+        {
+            tmp[j] = buf[j];
+        }
+        tmp[j] = '\0';
+        fprintf(stdout, "Snowcast server: %s\n",tmp);
     }
+    command_queue_dequeue(&cmd_queue);
+    
+    pthread_mutex_unlock(&queue_mutex);
+    
 }
 
 /*
@@ -324,12 +360,12 @@ void* recv_message(void* sockets)
     int numbytes;
     char buf[BUF_SIZE];
 #ifdef DEBUG
-    char test_buf[BUF_SIZE];
+        char test_buf[BUF_SIZE];
 #endif
     while(1)
     {
         memset(buf, 0, BUF_SIZE);
-        if ((numbytes = recv(sockfd, buf, BUF_SIZE-1, 0)) <= 0) {
+        if ((numbytes = read_line(sockfd, buf,BUF_SIZE-1)) <= 0) {
 			// Error when receive
             if(numbytes == 0)
             {
@@ -340,13 +376,12 @@ void* recv_message(void* sockets)
             }
             exit(1);
 		}
-        buf[numbytes] = '\0';
 #ifdef DEBUG
-        /*snprintf(test_buf, BUF_SIZE-1, "Recv:%s\n",buf);
-        fprintf(stdout, test_buf);*/
+        snprintf(test_buf, BUF_SIZE-1, "Recv:%s\n",buf);
+        fprintf(stdout, test_buf);
 #endif
-        
-        receiver_parser(buf, numbytes);
+        fprintf(stderr, "bytes:%d\n",numbytes);
+        receiver_parser(buf);
     }
     return NULL;
 }
