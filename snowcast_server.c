@@ -161,9 +161,70 @@ void play_song()
 }
 
 // TODO
-void stream_song()
+int stream_song(char *song_name)
 {
-    
+    int i = 0;
+    while(1){
+        int sockfd;
+        struct addrinfo hints, *servinfo, *p;
+        int rv;
+        int numbytes;
+        FILE *ptr_file;
+        char buf[1000];
+        
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        
+        if ((rv = getaddrinfo("127.0.0.1", "5001", &hints, &servinfo)) != 0) {
+            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+            return 1;
+        }
+        
+        // loop through all the results and make a socket
+        for(p = servinfo; p != NULL; p = p->ai_next) {
+            if ((sockfd = socket(p->ai_family, p->ai_socktype,
+                                 p->ai_protocol)) == -1) {
+                perror("talker: socket");
+                continue;
+            }
+            
+            break;
+        }
+        
+        if (p == NULL) {
+            fprintf(stderr, "talker: failed to bind socket\n");
+            return 2;
+        }
+        
+        // read data
+        ptr_file = fopen(song_name,"r"); // read mode
+        
+        if(!ptr_file)
+        {
+            perror("Error while opening the file.\n");
+            exit(EXIT_FAILURE);
+        }
+        
+        while(fgets(buf,1000, ptr_file)!= NULL ) {
+            printf("%s\n",buf);
+        }
+        
+        if ((numbytes = sendto(sockfd, buf, strlen(buf), 0,
+                               p->ai_addr, p->ai_addrlen)) == -1) {
+            perror("talker: sendto");
+            exit(1);
+        }
+        
+        freeaddrinfo(servinfo);
+        
+        printf("talker: sent %d bytes to %s\n", numbytes, "127.0.0.1");
+        close(sockfd);
+        
+        // loop counter
+        i++;
+        printf("\n%d\n", i);
+    }
 }
 
 /*
@@ -440,7 +501,7 @@ int parse_and_send(int s, const char* buf)
  @return: -1 for failure, 0 for success.
  @param sockfd: the socket.
  */
-int server_listen(int sockfd)
+int server_listen(int sockfd, char* song_name)
 {
     fprintf(stdout, "Snowcast_server: start listening\n");
     if (listen(sockfd, BACKLOG) == -1) {
@@ -523,6 +584,7 @@ int server_listen(int sockfd)
                             fprintf(stdout,"snowcast_server: new connection from    %s on "
                                     "socket %d\n",
                                     clients[first].ip_address,clients[first].socket);
+                            stream_song(song_name);
                         }
 					}
 				} else
@@ -603,11 +665,12 @@ int main(int argc, char* argv[])
     init_clients_info();
     init_stations();
     
-    if(server_listen(socket) == -1)
+    if(server_listen(socket, argv[2]) == -1)
     {
         fprintf(stderr, "error in server.");
         exit(1);
     }
+
     close(socket);
 	return 0;
 }

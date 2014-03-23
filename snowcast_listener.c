@@ -30,9 +30,9 @@ void *get_in_addr(struct sockaddr *sa)
  @return: nothing to return, always NULL
  @param sockets: the argument list
  */
-void* receive(void* sockets)
+void receive(int sockets)
 {
-    int sockfd = (int)sockets;
+    int sockfd = sockets;
     char buf[BUF_SIZE];
     int nbytes;
     struct sockaddr_storage their_addr;
@@ -60,7 +60,7 @@ void* receive(void* sockets)
             exit(1);
         }
     }
-    return NULL;
+//    return NULL;
 }
 
 /*
@@ -129,6 +129,8 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Error in binding the socket.\n");
         exit(1);
     }
+    
+    receive(sockfd);
 
     for(i = 0; i < NUM_RECEIVER; i++)
     {
