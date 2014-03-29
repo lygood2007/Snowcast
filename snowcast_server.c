@@ -14,7 +14,10 @@
 #include <inttypes.h>
 #include <netdb.h>
 #include <signal.h>
-
+#include <assert.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include "snowcast_global.h"
 /* defines */
 #define BACKLOG 10   // how many pending connections queue will hold
@@ -30,6 +33,7 @@
 #define INVALID 2
 
 #define MAX_STATION_NUM 30
+#define SONG_GROUPS 4
 
 typedef struct Control
 {
@@ -58,7 +62,8 @@ typedef struct InvalidCommand
 
 typedef struct Station
 {
-    char* cur_song;
+    const char* cur_song;
+    int fd;
 }Station_t;
 
 typedef struct ServerInfo
@@ -77,15 +82,19 @@ typedef enum State
 typedef struct ClientInfo
 {
     State_t state;
-    int socket;
-    const char* ip_address;
+    int socket; // for tcp
+    const char* ip_address; // for tcp
     uint16_t udp_port;
+    int udp_sock; // for udp
+    struct addrinfo* udp_addrinfo; // for udp
     // to be added
+    
 }ClientInfo_t;
 
 ServerInfo_t server;
 ClientInfo_t clients[MAX_CLIENT_NUM];
-Station_t stations[1]; // for testing now
+Station_t stations[1]; // TODO: for testing now
+pthread_t song_threads[1]; // TODO: for testing now, should be array later
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -154,79 +163,114 @@ int read_line(int fd, char data[], int maxlen)
     return -1;
 }
 
-// TODO
-void play_song()
+/*
+ build_udpconnection: initialize the socket for udp connection.
+ @param udp_port: the udp port
+ @param index: index in the client array
+ @return: 0 for success and -1 for failure
+ */
+int build_udpconnection(const char* udp_port, int index)
 {
+    assert(clients[index].ip_address != NULL);
+    assert(clients[index].socket != 0);
+    assert(clients[index].state != NO_STATE);
+    int sockfd;
+    int rv;
+    struct addrinfo hints, *servinfo, *p;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    char* ip_addr = clients[index].ip_address;
+    if ((rv = getaddrinfo(ip_addr, udp_port, &hints, &servinfo)) != 0) {
+        fprintf(stderr, "snowcast_server: getaddrinfo: %s\n", gai_strerror(rv));
+        return -1;
+    }
     
+    // loop through all the results and make a socket
+    for(p = servinfo; p != NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype,
+                             p->ai_protocol)) == -1) {
+            perror("socket");
+            continue;
+        }
+        
+        break;
+    }
+    
+    if (p == NULL) {
+        fprintf(stderr, "snowcast_server: failed to bind socket\n");
+        return -1;
+    }
+    
+    clients[index].udp_addrinfo = p;
+    clients[index].udp_sock = sockfd;
+    return 0;
 }
 
-// TODO
-int stream_song(char *song_name)
+/*
+ loop_song: loop the song and send the udp package to clients if there are.
+ @param fd: the file descriptor of the song
+ */
+int loop_song(int fd)
 {
-    int i = 0;
-    while(1){
-        int sockfd;
-        struct addrinfo hints, *servinfo, *p;
-        int rv;
-        int numbytes;
-        FILE *ptr_file;
-        char buf[1000];
-        
-        memset(&hints, 0, sizeof hints);
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_DGRAM;
-        
-        if ((rv = getaddrinfo("127.0.0.1", "5001", &hints, &servinfo)) != 0) {
-            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-            return 1;
-        }
-        
-        // loop through all the results and make a socket
-        for(p = servinfo; p != NULL; p = p->ai_next) {
-            if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                                 p->ai_protocol)) == -1) {
-                perror("talker: socket");
-                continue;
-            }
-            
-            break;
-        }
-        
-        if (p == NULL) {
-            fprintf(stderr, "talker: failed to bind socket\n");
-            return 2;
-        }
-        
-        // read data
-        ptr_file = fopen(song_name,"r"); // read mode
-        
-        if(!ptr_file)
+    assert(fd > 0);
+    /* one byte one time*/
+    int ret = 0;
+    int num_bytes = 0;
+    char buf[2];
+        char* buf_ptr = buf;
+    while(1)
+    {
+       
+        ret = read(fd, buf_ptr, 1);
+        if(ret < 0)
         {
-            perror("Error while opening the file.\n");
+            perror("read");
             exit(EXIT_FAILURE);
         }
-        
-        while(fgets(buf,1000, ptr_file)!= NULL ) {
-            printf("%s\n",buf);
+        else if(ret == 0)
+        {
+            // end of the file, seek to the beginning
+            lseek(fd, 0, SEEK_SET);
+            continue;
         }
         
-        if ((numbytes = sendto(sockfd, buf, strlen(buf), 0,
-                               p->ai_addr, p->ai_addrlen)) == -1) {
-            perror("talker: sendto");
-            exit(1);
+        /* loop through all clients */
+        for(int i = 0; i < MAX_CLIENT_NUM; i++)
+        {
+            if(clients[i].state == HANDSHAKED && clients[i].udp_sock != 0)
+            {
+                
+                if ((num_bytes = sendto(clients[i].udp_sock, buf_ptr, 1, 0,
+                                       clients[i].udp_addrinfo->ai_addr, clients[i].udp_addrinfo->ai_addrlen)) == -1) {
+                    perror("sendto");
+                }
+                else
+                {
+#ifdef DEBUG
+                    /*fprintf(stderr, "[DEBUG]snowcast_server: sent %d bytes to port %d.\n",num_bytes, clients[i].udp_sock, clients[i].udp_port);*/
+#endif
+                }
+            }
         }
-        
-        freeaddrinfo(servinfo);
-        
-        printf("talker: sent %d bytes to %s\n", numbytes, "127.0.0.1");
-        close(sockfd);
-        
-        // loop counter
-        i++;
-        printf("\n%d\n", i);
     }
 }
 
+/*
+ loop_song: loop the song and send the udp package to clients if there are.
+ @param fd: the file descriptor of the song
+ */
+void* loop_song_thread(void* args)
+{
+    int index = (int)args;
+    //int start = STATION_NUM/SONG_GROUPS;
+    
+    // TODO: currently responsible for only one station
+    // TODO: use event-driven select
+    loop_song(stations[0].fd);
+    
+    return NULL;
+}
 /*
  init_server_local: initialize the local settings of the server
  */
@@ -246,6 +290,37 @@ void init_server_locl()
 void init_clients_info()
 {
     memset(clients, 0, sizeof(clients));
+}
+
+/*
+ init_songs: basically open the files of those songs
+ @param files: file names of mp3
+ @param len: the lenth of the files array
+ */
+void init_songs(char** files, int len)
+{
+    assert(len >= 0);
+    assert(len < MAX_STATION_NUM);
+    
+    if(files == NULL)
+    {
+        fprintf(stderr, "snowcast_server: init_songs failed.\n");
+        exit(EXIT_FAILURE);
+    }
+    for(int i = 0; i < len; i++)
+    {
+        // open the files
+        int fd = 0;
+        if((fd = open(files[i], O_RDONLY, 0))<0)
+        {
+            perror("open");
+            // if it fails here, skip over this iteration
+        }else
+        {
+            stations[i].fd = fd;
+            stations[i].cur_song = files[i];
+        }
+    }
 }
 
 /*
@@ -347,11 +422,36 @@ int init_listen(const char* tcp_port, const char* server_name)
 }
 
 /*
- init_stations: TODO
+ init_stations: initialize the song threads
  */
 void init_stations()
 {
     stations[0].cur_song = "LALALA";
+    
+    /* init threads */
+    pthread_create(&song_threads, NULL, loop_song_thread, (void*)0);
+}
+
+/*
+ release_stations: wait for song threads to end
+ */
+void release_stations()
+{
+    int ret;
+    pthread_join(&song_threads, (void*)(&ret));
+}
+/*
+ close_client: close the socket and ret the structure
+ @param i: the index
+ @param master: the master set
+ */
+void close_client(int i, fd_set master)
+{
+    assert(i>=0 && i < MAX_CLIENT_NUM);
+    assert(clients[i].socket != 0);
+    close(clients[i].socket); // bye!
+    FD_CLR(clients[i].socket, &master); // remove from master set
+    memset(&clients[i], 0, sizeof(ClientInfo_t));
 }
 /*
  send_invalid_command: send the invalid command to one client
@@ -432,6 +532,7 @@ int send_announce(int s, const char* buf)
     return 0;
 }
 
+
 /*
  parse_and_send: parse the input from client and send reply to clients
  @return: 0 for success, 1 for error
@@ -455,10 +556,7 @@ int parse_and_send(int s, const char* buf)
     buf++;
     if(cmd == HELLO_CMD)
     {
-       // Control_t *b = (Control_t*)buf;
-        // set port number
         uint16_t* tmp = (uint16_t*)buf;
-      // uint16_t port = b->info;
         uint16_t port = (uint16_t)ntohs(*tmp);
        int index = find_client(s);
 #ifdef DEBUG
@@ -475,16 +573,34 @@ int parse_and_send(int s, const char* buf)
             //send_welcome(s);
         }else
         {
-            //int index = find_client(s);
-            clients[index].udp_port = port;
-
             // send welcome
             if(send_welcome(s) == -1)
             {
                 return -1;
             }
             else
-                clients[find_client(s)].state = HANDSHAKED;
+            {
+                
+                clients[index].state = HANDSHAKED;
+                // convert to
+                char udp_port[16];
+                char* udp_port_ptr = udp_port;
+                snprintf(udp_port_ptr, 16, "%d", (int)port);
+                //udp_port_ptr = itoa ((int)udp_port, udp_port_ptr, 10);
+                // build the udp connection
+                fprintf(stdout, "snowcast_server: build udp connection...\n");
+                if(build_udpconnection(udp_port_ptr, index) == -1)
+                {
+                    fprintf(stderr,"snowcast_server: cannot build udp connection\n.\n");
+                }
+                else
+                {
+                    fprintf(stdout, "snowcast_server: done!\n");
+#ifdef DEBUG
+                    clients[index].udp_port = port;
+#endif
+                }
+            }
         }
     }else if(cmd == SETSTATION_CMD)
     {
@@ -527,7 +643,8 @@ int server_listen(int sockfd, char* song_name)
     // keep track of the biggest file descriptor
 	fdmax = sockfd; // so far, it's this one
     
-	while(1) {
+	while(1)
+    {
 		read_fds = master; // copy it. the reason is that we need to reset the set once we do select.
 		if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1)
 		{
@@ -584,7 +701,6 @@ int server_listen(int sockfd, char* song_name)
                             fprintf(stdout,"snowcast_server: new connection from    %s on "
                                     "socket %d\n",
                                     clients[first].ip_address,clients[first].socket);
-                            stream_song(song_name);
                         }
 					}
 				} else
@@ -608,9 +724,11 @@ int server_listen(int sockfd, char* song_name)
 						{
                             perror("recv");
                         }
+                        close_client(index,master);
+                        /*
                         close(i); // bye!
                         FD_CLR(i, &master); // remove from master set
-                        memset(&clients[index], 0, sizeof(ClientInfo_t));
+                        memset(&clients[index], 0, sizeof(ClientInfo_t));*/
                     }
 					else // send to parser
 					{
@@ -633,6 +751,9 @@ int main(int argc, char* argv[])
     const char** file_name;
     //printf("%d",'\n');
     const char* tcp_port;
+    
+    int* files; // array for holding the file descriptors
+    
 	if(argc < 2)
 	{
 		usage();
@@ -651,6 +772,7 @@ int main(int argc, char* argv[])
 		{
 			file_name[i-2] = argv[i];
 		}
+        init_songs(file_name, argc-2);
 	}
 
     int socket;
@@ -665,12 +787,15 @@ int main(int argc, char* argv[])
     init_clients_info();
     init_stations();
     
-    if(server_listen(socket, argv[2]) == -1)
+    if(server_listen(socket, file_name[0]) == -1)
     {
         fprintf(stderr, "error in server.");
         exit(1);
     }
-
+    
+    release_stations();
     close(socket);
+    free(file_name);
+    
 	return 0;
 }

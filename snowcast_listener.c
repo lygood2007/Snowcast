@@ -13,7 +13,7 @@
 #include <pthread.h>
 
 #define NUM_RECEIVER 2 // Two thread to receive the stream from server
-#define BUF_SIZE 256
+#define BUF_SIZE 2
 
 pthread_t stream_receiver[NUM_RECEIVER];
 
@@ -132,7 +132,7 @@ int main(int argc, char* argv[])
     
     receive(sockfd);
 
-    for(i = 0; i < NUM_RECEIVER; i++)
+    /*for(i = 0; i < NUM_RECEIVER; i++)
     {
         pthread_create(&stream_receiver[i], NULL, receive, (void*)sockfd);
     }
@@ -142,7 +142,7 @@ int main(int argc, char* argv[])
         int tmp;// no use for the return value
         pthread_join(stream_receiver[i],&tmp);
     }
-    // close the socket
+    // close the socket*/
     close(sockfd);
 	return 0;
 }

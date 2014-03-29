@@ -215,7 +215,7 @@ int read_line(int fd, char data[], int maxlen)
  @param s: the socket
  @parem buf: the buffer from user input
  */
-int parse_and_send(int s, const char* buf)
+int parse_and_send(int s, char* buf)
 {
     assert(s>0);
     if(buf == NULL)
@@ -361,6 +361,7 @@ void* recv_message(void* sockets)
     char buf[BUF_SIZE];
 #ifdef DEBUG
         char test_buf[BUF_SIZE];
+    char* test_buf_ptr = test_buf;
 #endif
     while(1)
     {
@@ -378,7 +379,7 @@ void* recv_message(void* sockets)
 		}
 #ifdef DEBUG
         snprintf(test_buf, BUF_SIZE-1, "Recv:%s\n",buf);
-        fprintf(stdout, test_buf);
+        fprintf(stdout, test_buf_ptr);
 #endif
         fprintf(stderr, "bytes:%d\n",numbytes);
         receiver_parser(buf);
@@ -482,8 +483,8 @@ int main(int argc, char *argv[])
     pthread_attr_setstacksize(&send_attr, 1024*1024);
     pthread_attr_setstacksize(&receiver_attr, 1024*1024);
     
-    pthread_create(&sender, &send_attr, send_message,(void*)sockfd);
-    pthread_create(&receiver, &receiver_attr, recv_message, (void*)sockfd);
+    pthread_create(&sender, &send_attr, send_message,(void*)((long)sockfd));
+    pthread_create(&receiver, &receiver_attr, recv_message, (void*)((long)sockfd));
     
     pthread_join(sender, &ret);
     pthread_join(receiver, &ret);
