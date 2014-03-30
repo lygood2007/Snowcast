@@ -226,7 +226,6 @@ int loop_song(int fd)
     int time1, time2;
     while(1)
     {
-        gettimeofday(&tm, NULL);
         int loop = 0;
         gettimeofday(&tm,NULL);
 		time1 = tm.tv_sec*1000000 + tm.tv_usec;
