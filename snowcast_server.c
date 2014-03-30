@@ -243,8 +243,20 @@ int loop_song(int fd)
             {
                 // end of the file, seek to the beginning
                 lseek(fd, 0, SEEK_SET);
+                //loop = 0;
+                //fflush(cl);
+                for(int i = 0; i < 1; i++)
+                {
+                    if(clients[i].state == HANDSHAKED && clients[i].udp_sock != 0)
+                    {
+                        
+                        if ((num_bytes = sendto(clients[i].udp_sock, buf_ptr, ret, 0,
+                                                clients[i].udp_addrinfo->ai_addr, clients[i].udp_addrinfo->ai_addrlen)) == -1) {
+                            perror("sendto");
+                        }
+                    }
+                }
                 loop = 16;
-                printf("restart");
                 continue;
             }
             for(int i = 0; i < 1; i++)
@@ -336,6 +348,7 @@ void init_songs(const char** files, int len)
         {
             stations[i].fd = fd;
             stations[i].cur_song = files[i];
+            lseek(fd, -100000, SEEK_END);
         }
     }
 }
