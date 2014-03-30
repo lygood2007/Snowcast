@@ -13,7 +13,7 @@
 #include <pthread.h>
 
 #define NUM_RECEIVER 2 // Two thread to receive the stream from server
-#define BUF_SIZE 1024
+#define BUF_SIZE 2000
 
 pthread_t stream_receiver[NUM_RECEIVER];
 
@@ -35,7 +35,7 @@ void receive(int sockets)
     int sockfd = sockets;
     char buf[BUF_SIZE];
     int nbytes;
-    struct sockaddr_storage their_addr;
+    struct sockaddr their_addr;
     socklen_t addr_len;
     addr_len = sizeof their_addr;
     char ip_addr[INET6_ADDRSTRLEN];
@@ -74,9 +74,9 @@ int open_connection(const char* udp_port)
     struct addrinfo hints, *servinfo, *p;
     int rv;
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC; // set to AF_INET to force IPv4
+    hints.ai_family = AF_INET; // set to AF_INET to force IPv4
     hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_PASSIVE; // use my IP
+    //hints.ai_flags = ; // use my IP
     if ((rv = getaddrinfo(NULL, udp_port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "Getaddrinfo: %s\n", gai_strerror(rv));
         return -1;

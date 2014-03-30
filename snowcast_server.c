@@ -21,7 +21,7 @@
 #include "snowcast_global.h"
 /* defines */
 #define BACKLOG 10   // how many pending connections queue will hold
-#define BUF_SIZE 1025 // 256 bytes
+#define BUF_SIZE 1024 // 256 bytes
 
 #define MAX_CLIENT_NUM 10 // we can at most get 10 clients
 
@@ -172,8 +172,8 @@ int read_line(int fd, char data[], int maxlen)
  */
 int build_udpconnection(const char* udp_port, int index)
 {
-    if(clients[index].ip_address == NULL)
-        return 0;
+    //if(clients[index].ip_address == NULL)
+      //  return 0;
     assert(clients[index].ip_address != NULL);
     assert(clients[index].socket != 0);
     assert(clients[index].state != NO_STATE);
@@ -183,6 +183,7 @@ int build_udpconnection(const char* udp_port, int index)
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
+    clients[0].ip_address = "127.0.0.1";
     const char* ip_addr = clients[index].ip_address;
     if ((rv = getaddrinfo(ip_addr, udp_port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "snowcast_server: getaddrinfo: %s\n", gai_strerror(rv));
@@ -218,20 +219,21 @@ int loop_song(int fd)
 {
     assert(fd > 0);
     /* one byte one time*/
-    int ret = 0;
+    struct timeval tm;
+	int time1, time2;
     int num_bytes = 0;
     char buf[BUF_SIZE];
     char* buf_ptr = buf;
-    struct timeval tm;
-    int time1, time2;
     while(1)
     {
         int loop = 0;
         gettimeofday(&tm,NULL);
 		time1 = tm.tv_sec*1000000 + tm.tv_usec;
-        while(loop < 16)
+
+        while(loop != 16)
         {
-            ret = read(fd, buf_ptr, 1024);
+            memset(buf,0,BUF_SIZE);
+            int ret = read(fd, buf_ptr, BUF_SIZE);
             if(ret < 0)
             {
                 perror("read");
@@ -242,10 +244,9 @@ int loop_song(int fd)
                 // end of the file, seek to the beginning
                 lseek(fd, 0, SEEK_SET);
                 loop = 16;
+                printf("restart");
                 continue;
             }
-            
-            /* loop through all clients */
             for(int i = 0; i < 1; i++)
             {
                 if(clients[i].state == HANDSHAKED && clients[i].udp_sock != 0)
@@ -255,22 +256,18 @@ int loop_song(int fd)
                                             clients[i].udp_addrinfo->ai_addr, clients[i].udp_addrinfo->ai_addrlen)) == -1) {
                         perror("sendto");
                     }
-                    else
-                    {
-#ifdef DEBUG
-                        /*fprintf(stderr, "[DEBUG]snowcast_server: sent %d bytes to port %d.\n",num_bytes, clients[i].udp_sock, clients[i].udp_port);*/
-#endif
-                    }
                 }
             }
             loop++;
             //usleep(30);
         }
-        gettimeofday(&tm, NULL);
-        time2 = tm.tv_sec*1000000 + tm.tv_usec ;
+        loop  = 0;
+		gettimeofday(&tm, NULL);
+		time2 = tm.tv_sec*1000000 + tm.tv_usec ;
 		int time_elapsed = time2 - time1;
-		if(time_elapsed <= 300000){
-			usleep(300000 - time_elapsed);
+		if(time_elapsed <= 1000000){
+			//printf("Sleep\n");
+			usleep(1000000 - time_elapsed);
 		}
     }
 }
@@ -801,8 +798,7 @@ int main(int argc, char* argv[])
         exit(1);
     }
     
-    release_stations();
-    
     close(socket);
+    release_stations();
 	return 0;
 }
