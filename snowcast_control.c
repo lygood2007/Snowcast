@@ -68,6 +68,33 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+
+/*
+ send_all: send the message in multiple passes.
+ @return: -1 for failure, 0 for success.
+ @param s: the socket.
+ @param buf: the buffer.
+ @param len: the length of the buffer sent.
+ */
+int send_all(int s, const char *buf, int *len)
+{
+    int total = 0;        // how many bytes we've sent
+    int bytesleft = *len; // how many we have left to send
+    int n;
+    while(total < *len)
+	{
+        n = send(s, buf+total, bytesleft, 0);
+        if (n == -1)
+		{
+			break;
+		}
+        total += n;
+        bytesleft -= n;
+	}
+    *len = total; // return number actually sent here
+    return n == -1?-1:0; // return -1 on failure, 0 on success
+}
+
 /*
  send_set_station: send the set_station command to server
  @return: 0 for success and -1 for failure
@@ -149,32 +176,6 @@ int send_hello(int s, const char* udp_port){
     free(rbuf);
     
     return 0;
-}
-
-/*
- send_all: send the message in multiple passes.
- @return: -1 for failure, 0 for success.
- @param s: the socket.
- @param buf: the buffer.
- @param len: the length of the buffer sent.
- */
-int send_all(int s, const char *buf, int *len)
-{
-    int total = 0;        // how many bytes we've sent
-    int bytesleft = *len; // how many we have left to send
-    int n;
-    while(total < *len)
-	{
-        n = send(s, buf+total, bytesleft, 0);
-        if (n == -1)
-		{
-			break;
-		}
-        total += n;
-        bytesleft -= n;
-	}
-    *len = total; // return number actually sent here
-    return n == -1?-1:0; // return -1 on failure, 0 on success
 }
 
 /*
@@ -361,7 +362,7 @@ void* recv_message(void* sockets)
     char buf[BUF_SIZE];
 #ifdef DEBUG
         char test_buf[BUF_SIZE];
-    char* test_buf_ptr = test_buf;
+    const char* test_buf_ptr = test_buf;
 #endif
     while(1)
     {
@@ -379,7 +380,7 @@ void* recv_message(void* sockets)
 		}
 #ifdef DEBUG
         snprintf(test_buf, BUF_SIZE-1, "Recv:%s\n",buf);
-        fprintf(stdout, test_buf_ptr);
+        fprintf(stdout, "%s",test_buf_ptr);
 #endif
         fprintf(stderr, "bytes:%d\n",numbytes);
         receiver_parser(buf);

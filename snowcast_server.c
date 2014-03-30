@@ -21,7 +21,7 @@
 #include "snowcast_global.h"
 /* defines */
 #define BACKLOG 10   // how many pending connections queue will hold
-#define BUF_SIZE 256 // 256 bytes
+#define BUF_SIZE 1025 // 256 bytes
 
 #define MAX_CLIENT_NUM 10 // we can at most get 10 clients
 
@@ -50,14 +50,14 @@ typedef struct Announce
 {
     uint8_t reply_type;
     uint8_t songname_size;
-    char* song_name;
+    const char* song_name;
 }Announce_t;
 
 typedef struct InvalidCommand
 {
     uint8_t reply_type;
     uint8_t reply_string_size;
-    char* reply_string;
+    const char* reply_string;
 }InvalidCommand_t;
 
 typedef struct Station
@@ -95,6 +95,7 @@ ServerInfo_t server;
 ClientInfo_t clients[MAX_CLIENT_NUM];
 Station_t stations[1]; // TODO: for testing now
 pthread_t song_threads[1]; // TODO: for testing now, should be array later
+const char* song_files[MAX_CLIENT_NUM];
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -171,6 +172,8 @@ int read_line(int fd, char data[], int maxlen)
  */
 int build_udpconnection(const char* udp_port, int index)
 {
+    if(clients[index].ip_address == NULL)
+        return 0;
     assert(clients[index].ip_address != NULL);
     assert(clients[index].socket != 0);
     assert(clients[index].state != NO_STATE);
@@ -180,7 +183,7 @@ int build_udpconnection(const char* udp_port, int index)
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
-    char* ip_addr = clients[index].ip_address;
+    const char* ip_addr = clients[index].ip_address;
     if ((rv = getaddrinfo(ip_addr, udp_port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "snowcast_server: getaddrinfo: %s\n", gai_strerror(rv));
         return -1;
@@ -189,7 +192,7 @@ int build_udpconnection(const char* udp_port, int index)
     // loop through all the results and make a socket
     for(p = servinfo; p != NULL; p = p->ai_next) {
         if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                             p->ai_protocol)) == -1) {
+                             IPPROTO_UDP)) == -1) {
             perror("socket");
             continue;
         }
@@ -217,42 +220,59 @@ int loop_song(int fd)
     /* one byte one time*/
     int ret = 0;
     int num_bytes = 0;
-    char buf[2];
-        char* buf_ptr = buf;
+    char buf[BUF_SIZE];
+    char* buf_ptr = buf;
+    struct timeval tm;
+    int time1, time2;
     while(1)
     {
-       
-        ret = read(fd, buf_ptr, 1);
-        if(ret < 0)
+        gettimeofday(&tm, NULL);
+        int loop = 0;
+        gettimeofday(&tm,NULL);
+		time1 = tm.tv_sec*1000000 + tm.tv_usec;
+        while(loop < 16)
         {
-            perror("read");
-            exit(EXIT_FAILURE);
-        }
-        else if(ret == 0)
-        {
-            // end of the file, seek to the beginning
-            lseek(fd, 0, SEEK_SET);
-            continue;
-        }
-        
-        /* loop through all clients */
-        for(int i = 0; i < MAX_CLIENT_NUM; i++)
-        {
-            if(clients[i].state == HANDSHAKED && clients[i].udp_sock != 0)
+            ret = read(fd, buf_ptr, 1024);
+            if(ret < 0)
             {
-                
-                if ((num_bytes = sendto(clients[i].udp_sock, buf_ptr, 1, 0,
-                                       clients[i].udp_addrinfo->ai_addr, clients[i].udp_addrinfo->ai_addrlen)) == -1) {
-                    perror("sendto");
-                }
-                else
+                perror("read");
+                exit(EXIT_FAILURE);
+            }
+            else if(ret == 0)
+            {
+                // end of the file, seek to the beginning
+                lseek(fd, 0, SEEK_SET);
+                loop = 16;
+                continue;
+            }
+            
+            /* loop through all clients */
+            for(int i = 0; i < 1; i++)
+            {
+                if(clients[i].state == HANDSHAKED && clients[i].udp_sock != 0)
                 {
+                    
+                    if ((num_bytes = sendto(clients[i].udp_sock, buf_ptr, ret, 0,
+                                            clients[i].udp_addrinfo->ai_addr, clients[i].udp_addrinfo->ai_addrlen)) == -1) {
+                        perror("sendto");
+                    }
+                    else
+                    {
 #ifdef DEBUG
-                    /*fprintf(stderr, "[DEBUG]snowcast_server: sent %d bytes to port %d.\n",num_bytes, clients[i].udp_sock, clients[i].udp_port);*/
+                        /*fprintf(stderr, "[DEBUG]snowcast_server: sent %d bytes to port %d.\n",num_bytes, clients[i].udp_sock, clients[i].udp_port);*/
 #endif
+                    }
                 }
             }
+            loop++;
+            //usleep(30);
         }
+        gettimeofday(&tm, NULL);
+        time2 = tm.tv_sec*1000000 + tm.tv_usec ;
+		int time_elapsed = time2 - time1;
+		if(time_elapsed <= 300000){
+			usleep(300000 - time_elapsed);
+		}
     }
 }
 
@@ -262,11 +282,12 @@ int loop_song(int fd)
  */
 void* loop_song_thread(void* args)
 {
-    int index = (int)args;
+    //int index = (int)args;
     //int start = STATION_NUM/SONG_GROUPS;
     
     // TODO: currently responsible for only one station
     // TODO: use event-driven select
+    if(stations[0].fd != 0)
     loop_song(stations[0].fd);
     
     return NULL;
@@ -297,7 +318,7 @@ void init_clients_info()
  @param files: file names of mp3
  @param len: the lenth of the files array
  */
-void init_songs(char** files, int len)
+void init_songs(const char** files, int len)
 {
     assert(len >= 0);
     assert(len < MAX_STATION_NUM);
@@ -385,6 +406,7 @@ int init_listen(const char* tcp_port, const char* server_name)
 	if ((rv = getaddrinfo(server_name, tcp_port, &hints, &ai)) != 0)
 	{
 		fprintf(stderr, "Snowcast_server: %s\n", gai_strerror(rv));
+        freeaddrinfo(ai);
 		return -1;
 	}
     
@@ -401,6 +423,7 @@ int init_listen(const char* tcp_port, const char* server_name)
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
                        sizeof(bool)) == -1) {
             perror("setsockopt");
+            freeaddrinfo(ai);
             exit(1);
         }
 		if (bind(sockfd, p->ai_addr, p->ai_addrlen) < 0)
@@ -415,6 +438,7 @@ int init_listen(const char* tcp_port, const char* server_name)
 	if (p == NULL)
 	{
 		fprintf(stderr, "Snowcast_server: failed to bind\n");
+        freeaddrinfo(ai);
 		return -1;
 	}
 	freeaddrinfo(ai); // all done with this
@@ -426,10 +450,10 @@ int init_listen(const char* tcp_port, const char* server_name)
  */
 void init_stations()
 {
-    stations[0].cur_song = "LALALA";
-    
+    /*stations[0].cur_song = "LALALA";
+    */
     /* init threads */
-    pthread_create(&song_threads, NULL, loop_song_thread, (void*)0);
+    pthread_create(&song_threads[0], NULL, loop_song_thread, (void*)0);
 }
 
 /*
@@ -438,7 +462,7 @@ void init_stations()
 void release_stations()
 {
     int ret;
-    pthread_join(&song_threads, (void*)(&ret));
+    pthread_join(song_threads[0], (void*)(&ret));
 }
 /*
  close_client: close the socket and ret the structure
@@ -466,7 +490,7 @@ int send_invalid_command(int s, const char* err_message)
     invalid.reply_string_size = (uint8_t)(strlen(err_message));
     invalid.reply_string = err_message;
     
-    int len_str = strlen(err_message);
+    int len_str = (int)strlen(err_message);
     int len =sizeof(uint8_t)*2+ len_str+1;
     char* buf = (char*)malloc(len);
     char* rbuf = buf;
@@ -498,7 +522,7 @@ int send_welcome(int s)
 {
     int len = sizeof(uint8_t) + sizeof(uint16_t)+1;
     
-    char* buf = malloc(len);
+    char* buf = (char*)malloc(len);
     char* rbuf = buf;
     memset(buf, 0, len);
     *buf = WELCOME;
@@ -585,7 +609,7 @@ int parse_and_send(int s, const char* buf)
                 // convert to
                 char udp_port[16];
                 char* udp_port_ptr = udp_port;
-                snprintf(udp_port_ptr, 16, "%d", (int)port);
+                sprintf(udp_port_ptr, "%d", (int)port);
                 //udp_port_ptr = itoa ((int)udp_port, udp_port_ptr, 10);
                 // build the udp connection
                 fprintf(stdout, "snowcast_server: build udp connection...\n");
@@ -617,7 +641,7 @@ int parse_and_send(int s, const char* buf)
  @return: -1 for failure, 0 for success.
  @param sockfd: the socket.
  */
-int server_listen(int sockfd, char* song_name)
+int server_listen(int sockfd)
 {
     fprintf(stdout, "Snowcast_server: start listening\n");
     if (listen(sockfd, BACKLOG) == -1) {
@@ -626,7 +650,6 @@ int server_listen(int sockfd, char* song_name)
     }
     //fprintf(stdout, "Snowcast_server: start listening\n");
     int i;
-    int ret;
     int fdmax;
     fd_set master;    // master file descriptor list
     fd_set read_fds;  // temp file descriptor list for select()
@@ -725,10 +748,6 @@ int server_listen(int sockfd, char* song_name)
                             perror("recv");
                         }
                         close_client(index,master);
-                        /*
-                        close(i); // bye!
-                        FD_CLR(i, &master); // remove from master set
-                        memset(&clients[index], 0, sizeof(ClientInfo_t));*/
                     }
 					else // send to parser
 					{
@@ -748,12 +767,8 @@ void usage()
 
 int main(int argc, char* argv[])
 {
-    const char** file_name;
     //printf("%d",'\n');
     const char* tcp_port;
-    
-    int* files; // array for holding the file descriptors
-    
 	if(argc < 2)
 	{
 		usage();
@@ -762,20 +777,14 @@ int main(int argc, char* argv[])
 	else
 	{
 		tcp_port = argv[1];
-		file_name = (char**)malloc(sizeof(char*)*(argc-2));
-        if(file_name == NULL)
-        {
-            fprintf(stderr, "No spaces for heap.\n");
-            exit(1);
-        }
         for(int i = 2; i < argc; i++)
 		{
-			file_name[i-2] = argv[i];
+			song_files[i-2] = argv[i];
 		}
-        init_songs(file_name, argc-2);
+        init_songs(song_files, argc-2);
 	}
 
-    int socket;
+    int socket = 0;
     
     if((socket = init_listen(tcp_port, NULL)) < 0)
     {
@@ -787,15 +796,14 @@ int main(int argc, char* argv[])
     init_clients_info();
     init_stations();
     
-    if(server_listen(socket, file_name[0]) == -1)
+    if(server_listen(socket) == -1)
     {
         fprintf(stderr, "error in server.");
         exit(1);
     }
     
     release_stations();
-    close(socket);
-    free(file_name);
     
+    close(socket);
 	return 0;
 }

@@ -13,7 +13,7 @@
 #include <pthread.h>
 
 #define NUM_RECEIVER 2 // Two thread to receive the stream from server
-#define BUF_SIZE 2
+#define BUF_SIZE 1024
 
 pthread_t stream_receiver[NUM_RECEIVER];
 
@@ -41,18 +41,18 @@ void receive(int sockets)
     char ip_addr[INET6_ADDRSTRLEN];
     while(1)
     {
-        if ((nbytes = recvfrom(sockfd, buf, BUF_SIZE-1 , 0,
+        if ((nbytes = recvfrom(sockfd, buf, BUF_SIZE , 0,
                                  (struct sockaddr *)&their_addr, &addr_len)) == -1) {
             perror("recvfrom");
             exit(1);
         }
-        fprintf(stderr, "Listener: got packet from %s\n",
+        /*fprintf(stderr, "Listener: got packet from %s\n",
                inet_ntop(their_addr.ss_family,
                          get_in_addr((struct sockaddr *)&their_addr),
                          ip_addr, sizeof ip_addr));
         fprintf(stderr, "Listener: packet is %d bytes long\n",nbytes);
         buf[nbytes] = '\0';
-        fprintf(stderr, "Listener: packet contains \"%s\"\n", buf);
+        fprintf(stderr, "Listener: packet contains \"%s\"\n", buf);*/
         // output to stdout
         if(write(STDOUT_FILENO, buf, nbytes) != nbytes)
         {
@@ -113,7 +113,7 @@ void usage()
 int main(int argc, char* argv[])
 {
     const char* udp_port;
-    int i;
+    //int i;
     int sockfd;
     if(argc != 2)
     {
@@ -134,15 +134,15 @@ int main(int argc, char* argv[])
 
     /*for(i = 0; i < NUM_RECEIVER; i++)
     {
-        pthread_create(&stream_receiver[i], NULL, receive, (void*)sockfd);
+        pthread_create(&stream_receiver[i], NULL, receive, (void*)((long)sockfd));
     }
     
     for(i = 0; i < NUM_RECEIVER; i++)
     {
         int tmp;// no use for the return value
         pthread_join(stream_receiver[i],&tmp);
-    }
-    // close the socket*/
+    }*/
+    // close the socket
     close(sockfd);
 	return 0;
 }

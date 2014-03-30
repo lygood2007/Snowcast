@@ -1,5 +1,7 @@
 #include "command_queue.h"
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
 void command_queue_init(command_queue_t *q)
