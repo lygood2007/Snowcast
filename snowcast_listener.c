@@ -1,3 +1,7 @@
+/*
+ Author: yanli, xiaoyi
+ Time stamp: 03/31/2014
+ */
 #define DEBUG
 
 #include <stdio.h>
