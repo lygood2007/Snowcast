@@ -1699,7 +1699,6 @@ void init_globals()
 
 int main(int argc, char* argv[])
 {
-    close(1000);
     const char* tcp_port;
 	if(argc < 3)
 	{
