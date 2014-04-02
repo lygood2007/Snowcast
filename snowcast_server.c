@@ -343,9 +343,9 @@ int loop_song(station_t* station)
     int fd = 0;
     int song_counter = 0;
     // disable the cancel
-    int old;
+    
      pthread_cleanup_push(cleanup_files_handler, &fd);
-    pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &old);
+    //pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &old);
     /* open and close is cancellation point */
     if((fd = open(station->songs[0], O_RDONLY, 0))<0)
     {
@@ -471,7 +471,7 @@ void* loop_song_thread(void* args)
 {
     // explicitly set the cancellation type to be deferred (though it's default)
     int old_type;
-    pthread_setcancelstate(PTHREAD_CANCEL_DEFERRED, &old_type);
+    pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, &old_type);
     
     station_t* station = (station_t*)args;
     assert(station);
@@ -814,6 +814,7 @@ void remove_client_from_station(clientinfo_t* client)
     }
     pthread_mutex_unlock(&client->cur_station->lock);
 }
+
 /*
  close_client: close the socket and ret the structure
  @param i: the index
@@ -860,6 +861,7 @@ void append_client_to_station(clientinfo_t* client, station_t* station)
         station->connected_clients.tail_clients->next_client = client;
         station->connected_clients.tail_clients = station->connected_clients.tail_clients->next_client;
     }
+    station->connected_clients.counter++;
     client->cur_station = station;
     pthread_mutex_unlock(&station->lock);
 }
@@ -944,36 +946,27 @@ int parse_and_send(int s, const char* buf)
 #ifdef DEBUG
         fprintf(stdout, "I get [Set %d].\n", station_num);
 #endif
-        pthread_mutex_lock(&g_station_list.lock);
-        if(station_num < 0 || station_num >= g_station_list.counter)
+        // find the destination station
+        station_t* target = find_station_from_id(station_num);
+        if(target == NULL)
         {
-            pthread_mutex_unlock(&g_station_list.lock);
             send_invalid_command(s, "Invalid station number.");
+            return 0;
         }
-        else
+        // if the client has a current station, remove it from its
+        // station
+        
+        if(g_clients[index].cur_station != NULL)
         {
-            pthread_mutex_unlock(&g_station_list.lock);
-            // find the destination station
-            station_t* target = find_station_from_id(station_num);
-            if(target == NULL)
-            {
-                send_invalid_command(s, "Invalid station number.");
-                return 0;
-            }
-            // if the client has a current station, remove it from its
-            // station
-            int index = find_client(s);
-            if(g_clients[index].cur_station != NULL)
-            {
-                remove_client_from_station(&g_clients[index]);
-            }
-            append_client_to_station(&g_clients[index], target);
-            
-            // send an announcement to
-            
-            send_announce(g_clients[index].socket, "Set Station Confirmed");
-            send_cur_song(s,g_clients[index].cur_station );
+            remove_client_from_station(&g_clients[index]);
         }
+        append_client_to_station(&g_clients[index], target);
+        
+        // send an announcement to
+        
+        send_announce(g_clients[index].socket, "Set Station Confirmed");
+        send_cur_song(s,g_clients[index].cur_station );
+        
     }
     else if(cmd == REQUEST_CMD)
     {
@@ -1418,15 +1411,13 @@ void print_stations()
     while(start != NULL)
     {
         
-        // TODO: Deadlock happens here, why?
         pthread_mutex_lock(&start->lock);
 
         for(int i= 0; i < start->song_counter; i++)
         {
             fprintf(stdout, "station[%d]: %s\n",start->id,start->songs[i]);
         }
-        //
-        // print the clients then
+
         clientinfo_t* c = start->connected_clients.head_clients;
         while(c != NULL)
         {
@@ -1471,6 +1462,9 @@ void command_helper()
     fprintf(stdout, "l: list all stations.\n");
     fprintf(stdout, "c: print all clients.\n");
     fprintf(stdout, "q: exit.\n");
+    fprintf(stdout, "a [dir/mp3]: add new station to your server.\n");
+    fprintf(stdout, "d [number]: delete the station.\n");
+    fprintf(stdout, "s: shutdown all stations.\n");
     fprintf(stdout, "********************************************\n\n");
 }
 
@@ -1563,6 +1557,44 @@ void* user_input(void* arg)
                 }
                 break;
             }
+            case 'd':
+            {
+                if(strcmp(tokens[0],"d") != 0)
+                {
+                    fprintf(stderr, "Ambiguous input.\n");
+                    continue;
+                }
+                
+                // The number could be more than 2 to do mutiple delete
+                
+                for(int i = 1; i < num; i++)
+                {
+                    // convert the tokens to real number
+                    int id = atoi(tokens[i]);
+                    pthread_mutex_lock(&g_station_list.lock);
+                    if(id < 0 || id >= g_station_list.counter)
+                    {
+                        pthread_mutex_unlock(&g_station_list.lock);
+                        continue;
+                    }
+                    pthread_mutex_unlock(&g_station_list.lock);
+                    station_t* station = find_station_from_id(id);
+                    if(station == NULL)
+                    {
+                        continue;
+                    }
+                    
+                    // valid number
+                    // find it;
+                    remove_station(station);
+                }
+                break;
+            }
+            case 's':
+            {
+                shutdown_all();
+                break;
+            }
             default:
             {
                 fprintf(stdout, "Ambiguous command. Help for 'h'.\n");
@@ -1575,10 +1607,17 @@ void* user_input(void* arg)
 /*
  shutdown_all: shut down every station and close everything
  */
-// TODO
 void shutdown_all()
 {
-    
+    // shutdown all stations
+    while(g_station_list.head_station != NULL)
+    {
+        remove_station(g_station_list.head_station);
+    }
+    //make sure everything is cleared
+    assert(g_station_list.counter == 0);
+    assert(g_station_list.head_station == NULL);
+    assert(g_station_list.tail_station == NULL);
 }
 
 // usage
@@ -1600,28 +1639,46 @@ void init_stations()
 
 /*
  remove_station: remove the specified station
+ @param station: the station address
  */
 // NEED REVIEW
 void remove_station(station_t* station)
 {
-    assert(station);
-    
+    assert(station != NULL);
     // lock the stations
     int find = 0;
     pthread_mutex_lock(&g_station_list.lock);
-    
     station_t* st = g_station_list.head_station;
     if(station == st) // delete head
     {
         find = 1;
         /* CAUTION: I use pthread_cancel, I need to take care of the cancel point */
+        station_t* station = st;
         pthread_cancel(station->sender);
+        
+        // send a package firstly to all connect clients
         pthread_mutex_lock(&station->lock);
+        clientinfo_t* c = station->connected_clients.head_clients;
+        while(c != NULL)
+        {
+            // send announce
+            send_announce(c->socket, "Station is closed.");
+            clientinfo_t* next = c->next_client;
+            c->next_client = NULL;
+            c->cur_station = NULL;
+            c = next;
+            station->connected_clients.counter--;
+        }
+        assert(station->connected_clients.counter == 0);
+    
+        // release the station
+        // free the songs
         for(int i = 0; i < station->song_counter; i++)
         {
             free((void*)station->songs[i]);
         }
         pthread_mutex_unlock(&station->lock);
+        
         pthread_mutex_destroy(&station->lock);
         g_station_list.counter--;
         if(g_station_list.counter == 0)
@@ -1629,6 +1686,12 @@ void remove_station(station_t* station)
             g_station_list.head_station = NULL;
             g_station_list.tail_station = NULL;
         }
+        else
+        {
+            // update the station list
+            g_station_list.head_station = station->next_station;
+        }
+        // free the station
         free(station);
     }
     else
@@ -1637,10 +1700,26 @@ void remove_station(station_t* station)
         {
             if(st->next_station == station)
             {
+                // send a package to the previously connected clients
                 find = 1;
+                 station_t* station = st->next_station;
                 /* CAUTION: I use pthread_cancel, I need to take care of the cancel point */
                 pthread_cancel(station->sender);
+                
                 pthread_mutex_lock(&station->lock);
+                clientinfo_t* c = station->connected_clients.head_clients;
+                while(c != NULL)
+                {
+                    // send announce
+                    send_announce(c->socket, "Station is closed.");
+                    clientinfo_t* next = c->next_client;
+                    c->next_client = NULL;
+                    c->cur_station = NULL;
+                    c = next;
+                    station->connected_clients.counter--;
+                }
+                assert(station->connected_clients.counter == 0);
+                
                 for(int i = 0; i < station->song_counter; i++)
                 {
                     free((void*)station->songs[i]);
@@ -1648,22 +1727,26 @@ void remove_station(station_t* station)
                 pthread_mutex_unlock(&station->lock);
                 pthread_mutex_destroy(&station->lock);
                 g_station_list.counter--;
+                // update the list
                 st->next_station = station->next_station;
                 if(st->next_station == NULL)
                 {
+                    // the st is the tail now
                     g_station_list.tail_station = st;
                 }
                 free(station);
+                // send a package to the previously connected clients
                 break;
             }
             else
             {
+                // keep walking
                 st = st->next_station;
             }
         }
     }
     pthread_mutex_unlock(&g_station_list.lock);
-    assert(find);
+    assert(find);// should always find!
 }
 
 /*
@@ -1686,7 +1769,23 @@ void release_stations()
     while(start != NULL)
     {
         station_t* next = start->next_station;
+        
         pthread_mutex_lock(&start->lock);
+        // remove the clients, walk through the clients, and set the next to be zero
+        clientinfo_t* c = start->connected_clients.head_clients;
+        while(c != NULL)
+        {
+            clientinfo_t* next = c->next_client;
+            c->next_client = NULL;
+            c->cur_station = NULL;
+            c = next;
+            start->connected_clients.counter--;
+        }
+        assert(start->connected_clients.counter == 0);
+        // reset it
+        start->connected_clients.head_clients = NULL;
+        start->connected_clients.tail_clients = NULL;
+        
         for(int i = 0; i < start->song_counter; i++)
         {
             free((void*)start->songs[i]);

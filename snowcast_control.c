@@ -334,6 +334,9 @@ void command_helper()
     fprintf(stdout, "****************manual***************\n");
     fprintf(stdout, "/*************************************\n");
     fprintf(stdout, "Set [number]: set the station number.\n");
+    fprintf(stdout, "Reqall: request all songs of your current station.\n");
+    fprintf(stdout, "Reqcur: request the current cong of your current station.\n");
+    fprintf(stdout, "Reqast: request all stations' current playing song.\n");
     fprintf(stdout, "Exit: disconnect.\n");
     // TODO
     /* Note that calling exit here doesn't mean the listner is killed */

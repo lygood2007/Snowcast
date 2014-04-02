@@ -1,0 +1,136 @@
+Yans-MacBook-Pro:snowcast yan$ ./snowcast_server 5000 ./station_1 ./station_2 ./station_4
+
+/**The server can have at most 8 stations.**/
+
+********************************************
+****************manual**********************
+l: list all stations.
+c: print all clients.
+q: exit.
+********************************************
+
+Added station ./station_1 successfully.
+Added station ./station_2 successfully.
+Added station ./station_4 successfully.
+snowcast_server: start listening
+
+input:
+
+snowcast_server: new connection from 127.0.0.1 on socket 10
+I get hello from socket 10, udp_port:5001.
+
+snowcast_server: build udp connection...
+snowcast_server: done!
+I get Setstation from socket 10.
+I get [Set 0].
+
+snowcast_server: new connection from 127.0.0.1 on socket 12
+I get hello from socket 12, udp_port:5002.
+
+snowcast_server: build udp connection...
+snowcast_server: done!
+I get Setstation from socket 12.
+I get [Set 2].
+l
+There are 3 stations.
+station[0]: ./station_1/ak.mp3
+station[0]: ./station_1/Beethoven-SymphonyNo5.mp3
+station[0]: ./station_1/DukeEllington-Caravan.mp3
+station[0]: clients[127.0.0.1:5001]
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 10.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 11.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 2.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 3.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 4.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 5.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 6.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 7.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 8.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 9.mp3
+station[2]: ./station_4/U2-StuckInAMoment.mp3
+station[2]: ./station_4/VanillaIce-IceIceBaby.mp3
+station[2]: clients[127.0.0.1:5002]
+
+input:
+d 2
+
+input:
+l
+There are 2 stations.
+station[0]: ./station_1/ak.mp3
+station[0]: ./station_1/Beethoven-SymphonyNo5.mp3
+station[0]: ./station_1/DukeEllington-Caravan.mp3
+station[0]: clients[127.0.0.1:5001]
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 10.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 11.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 2.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 3.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 4.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 5.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 6.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 7.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 8.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 9.mp3
+
+input:
+a ./station_1
+Added station ./station_1 successfully.
+
+input:
+l
+There are 3 stations.
+station[0]: ./station_1/ak.mp3
+station[0]: ./station_1/Beethoven-SymphonyNo5.mp3
+station[0]: ./station_1/DukeEllington-Caravan.mp3
+station[0]: clients[127.0.0.1:5001]
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 10.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 11.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 2.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 3.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 4.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 5.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 6.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 7.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 8.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 9.mp3
+station[2]: ./station_1/ak.mp3
+station[2]: ./station_1/Beethoven-SymphonyNo5.mp3
+station[2]: ./station_1/DukeEllington-Caravan.mp3
+
+input:
+d 0
+
+input:
+I get Setstation from socket 10.
+I get [Set 2].
+I get Setstation from socket 12.
+I get [Set 1].
+
+snowcast_server: disconnected from 127.0.0.1 
+snowcast_server: socket 12 hung up
+l
+There are 2 stations.
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 10.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 11.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 2.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 3.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 4.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 5.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 6.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 7.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 8.mp3
+station[1]: ./station_2/pp/ManchurianCandidates-TwentyEightHouse copy 9.mp3
+station[2]: ./station_1/ak.mp3
+station[2]: ./station_1/Beethoven-SymphonyNo5.mp3
+station[2]: ./station_1/DukeEllington-Caravan.mp3
+station[2]: clients[127.0.0.1:5001]
+
+input:
+I get Setstation from socket 10.
+I get [Set 1].
+d 2
+
+input:
+s 
+Assertion failed: (station->connected_clients.counter == 0), function remove_station, file snowcast_server.c, line 1669.
+Abort trap: 6
