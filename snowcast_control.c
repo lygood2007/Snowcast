@@ -26,10 +26,16 @@
 /* defines */
 #define HELLO_CMD 0
 #define SETSTATION_CMD 1
+#define REQUEST_CMD 2
 
 #define WELCOME 0
 #define ANNOUNCE 1
 #define INVALID 2
+#define REQUEST 3
+
+#define ALL 0
+#define CURRENT 1
+#define ALL_STATION 2
 
 #define BUF_SIZE 256 // 256 bytes
 #define MAX_TOKENS 10
@@ -41,8 +47,9 @@ pthread_t g_receiver;
 pthread_attr_t g_receiver_attr;
 pthread_mutex_t g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 command_queue_t g_cmd_queue;
-/* pending command queue */
+int wait_for_announce = 0;
 
+/* pending command queue */
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
 {
@@ -112,7 +119,47 @@ int send_set_station(int s, const char* station)
     memcpy(buf, &station_num,sizeof(uint16_t));
     buf+= sizeof(uint16_t);
     *buf = '\n';// boundary
-    ////fprintf(stderr, "prepared to send\n");
+    if(send_all(s, rbuf, &len) == -1)
+    {
+        // Don't forget to release it
+        free(rbuf);
+        perror("send");
+        return -1;
+    }
+    // Don't forget to release it
+    free(rbuf);
+    return 0;
+}
+
+/*
+ send_request: send the request to the server
+ @param s: the socket
+ @param type: request type
+ @return: 0 for success and -1 for failure
+ */
+int send_request(int s, uint8_t type)
+{
+    assert(type == ALL || type == CURRENT || type == ALL_STATION);
+    int len = sizeof(uint8_t) + sizeof(uint8_t) + 1;
+    char* buf = malloc(len);
+    if(buf == NULL)
+    {
+        fprintf(stderr, "malloc failed!\n");
+        exit(EXIT_FAILURE);
+    }
+    pthread_mutex_lock(&g_queue_mutex);
+    command_queue_enqueue(&g_cmd_queue, REQUEST_CMD);
+    
+    pthread_mutex_unlock(&g_queue_mutex);
+    char* rbuf = buf;
+    memset(buf, 0, len);
+    *buf = REQUEST_CMD;
+    
+    buf++;
+    memcpy(buf, &type,sizeof(uint8_t));
+    
+    buf+= sizeof(uint8_t);
+    *buf = '\n';
     if(send_all(s, rbuf, &len) == -1)
     {
         // Don't forget to release it
@@ -229,18 +276,24 @@ int parse_and_send(int s, char* buf)
     {
         if(strncmp(tokens[0], "Exit",4) == 0)
         {
-            fprintf(stdout, "\nThanks for using snowcast.");
+            fprintf(stdout, "Thanks for using snowcast.\n");
             exit(0);
         }
-        /*else if(strncmp(tokens[0], "Hello", 5) == 0)
+        else if(strncmp(tokens[0], "Reqall", 6) == 0)
         {
-            // Only for test
-            if(send_hello(s, "5000") == -1)
-            {
-                //fprintf(stderr,"send hello failed.\n" );
-            }
-            return 0;
-        }*/
+            // request all stations' current playing song
+            send_request(s, ALL);
+        }
+        else if(strncmp(tokens[0], "Reqast",6) == 0)
+        {
+            // TODO
+            send_request(s, ALL_STATION);
+        }
+        else if(strncmp(tokens[0], "Reqcur",6) == 0)
+        {
+            // TODO
+            send_request(s, CURRENT);
+        }
     }else
     {
         if(strncmp(tokens[0], "Set",3 ) == 0)
@@ -251,17 +304,24 @@ int parse_and_send(int s, char* buf)
                 //fprintf(stderr, "\nSet [station number]");
                 return -1;
             }
-
+            
+            if(wait_for_announce == 1)
+            {
+                fprintf(stderr, "Waiting for server's last confirmation...\n");
+                //fprintf(stderr, "\nSet [station number]");
+                return -1;
+            }
             if(send_set_station(s, tokens[1]) == -1)
             {
                 fprintf(stderr, "Set station failed.\n");
                 return -1;
             }else
+            {
+                // print
+                fprintf(stdout, "Waiting for server's confirmation...\n");
                 return 0;
+            }
             
-        }else if(strncmp(tokens[0], "Req",3) == 0)
-        {
-            // TODO
         }
     }
     fprintf(stderr, "Ambiguous input.\n");
@@ -274,6 +334,10 @@ void command_helper()
     fprintf(stdout, "****************manual***************\n");
     fprintf(stdout, "/*************************************\n");
     fprintf(stdout, "Set [number]: set the station number.\n");
+    fprintf(stdout, "Exit: disconnect.\n");
+    // TODO
+    /* Note that calling exit here doesn't mean the listner is killed */
+    /* you have to kill it manually, a good way is to send the listner */
     fprintf(stdout, "**************************************/\n\n");
 }
 /*
@@ -282,28 +346,81 @@ void command_helper()
  */
 void receiver_parser(const char* buf)
 {
-    //fflush(stdout);
     if(buf == NULL)
         return;
-    
-    ////fprintf(stderr,"bytes:%d\n", n);
-    
-    pthread_mutex_lock(&g_queue_mutex);
-    uint8_t head = command_queue_head(&g_cmd_queue);
     uint8_t first_byte = *(uint8_t*)buf;
     buf++;
-    if(first_byte == WELCOME && head == HELLO_CMD)
+    
+    if(first_byte == WELCOME)
     {
-        fprintf(stdout, "\nSnowcast server: welcome, please set the station number.\n");
-        command_helper();
-        fputs("%%", stdout);
-        fflush(stdout);
-    }else if(first_byte == ANNOUNCE && head == SETSTATION_CMD)
+        pthread_mutex_lock(&g_queue_mutex);
+        uint8_t head = command_queue_head(&g_cmd_queue);
+        if(head == HELLO_CMD)
+        {
+            fprintf(stdout, "\nSnowcast server: welcome, please set the station number.\n");
+            command_helper();
+            fputs("%%", stdout);
+            fflush(stdout);
+            command_queue_dequeue(&g_cmd_queue);
+        }
+        else
+            assert(0);
+        pthread_mutex_unlock(&g_queue_mutex);
+    }else if(first_byte == ANNOUNCE)
     {
         // to be added
+        uint8_t str_size = *(uint8_t*)buf;
+        buf++;
+        char tmp[BUF_SIZE];
+        // copy the string
+        int j;
+        for(j = 0; j < str_size; j++)
+        {
+            tmp[j] = buf[j];
+        }
+        tmp[j] = '\0';
+        if(strcmp(tmp, "Set Station Confirmed") == 0)
+        {
+            pthread_mutex_lock(&g_queue_mutex);
+            uint8_t head = command_queue_head(&g_cmd_queue);
+            if(head == SETSTATION_CMD)
+            {
+                wait_for_announce = 0;
+                fprintf(stdout, "\nSnowcast server: Set station confirmed.\n");
+                command_queue_dequeue(&g_cmd_queue);
+            }
+            else
+                assert(0);
+            pthread_mutex_unlock(&g_queue_mutex);
+        }
+        else if(strcmp(tmp, "Request Confirmed") == 0)
+        {
+            pthread_mutex_lock(&g_queue_mutex);
+            uint8_t head = command_queue_head(&g_cmd_queue);
+            if(head == REQUEST_CMD)
+            {
+                fprintf(stdout, "\nSnowcast server: Request confirmed.\n");
+                command_queue_dequeue(&g_cmd_queue);
+            }
+            else
+                assert(0);
+            
+            pthread_mutex_unlock(&g_queue_mutex);
+        }
+        else
+        {
+            // random announcement
+            fprintf(stdout, "Snowcast server: %s\n",tmp);
+        }
         
     }else if(first_byte == INVALID)
     {
+        pthread_mutex_lock(&g_queue_mutex);
+        uint8_t head = command_queue_head(&g_cmd_queue);
+        if(head == SETSTATION_CMD)
+        {
+            wait_for_announce = 0;
+        }
         uint8_t str_size = *(uint8_t*)buf;
         buf++;
         
@@ -317,11 +434,15 @@ void receiver_parser(const char* buf)
         fprintf(stdout, "\nSnowcast server: %s\n",tmp);
         fputs("%%", stdout);
         fflush(stdout);
+        command_queue_dequeue(&g_cmd_queue);
+        pthread_mutex_unlock(&g_queue_mutex);
     }
-    command_queue_dequeue(&g_cmd_queue);
-    
-    pthread_mutex_unlock(&g_queue_mutex);
-    
+    else
+    {
+        command_queue_dequeue(&g_cmd_queue);
+        pthread_mutex_unlock(&g_queue_mutex);
+
+    }
 }
 
 /*
@@ -368,7 +489,7 @@ void* recv_message(void* sockets)
     char buf[BUF_SIZE];
 #ifdef DEBUG
     char test_buf[BUF_SIZE];
-    const char* test_buf_ptr = test_buf;
+   // const char* test_buf_ptr = test_buf;
 #endif
     while(1)
     {

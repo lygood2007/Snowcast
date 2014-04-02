@@ -42,7 +42,9 @@ void receive(int sockets)
     struct sockaddr their_addr;
     socklen_t addr_len;
     addr_len = sizeof their_addr;
-    char ip_addr[INET6_ADDRSTRLEN];
+    //char ip_addr[INET6_ADDRSTRLEN];
+    // trace last 4 bytes
+    char last_four_bytes[5];
     while(1)
     {
         if ((nbytes = recvfrom(sockfd, buf, BUF_SIZE , 0,
@@ -50,6 +52,19 @@ void receive(int sockets)
             perror("recvfrom");
             exit(1);
         }
+        if(nbytes >= 4)
+        {
+            strncpy(last_four_bytes, buf, 4);
+            last_four_bytes[4] = '\0';
+            /* UNSAFE HERE, what if nbytes is smaller than 2 and you send it 
+               twice to make a "STOP", it's tricky but I don't want to deal 
+               with it.*/
+            if(strcmp(last_four_bytes, "STOP") == 0)
+            {
+                exit(0);
+            }
+        }
+        
         /*fprintf(stderr, "Listener: got packet from %s\n",
                inet_ntop(their_addr.ss_family,
                          get_in_addr((struct sockaddr *)&their_addr),

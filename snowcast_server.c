@@ -1,6 +1,6 @@
 /*
  Author: yanli, xiaoyi
- Time stamp: 03/31/2014
+ Time stamp: 04/01/2014
  */
 /*
  * For simplicity we use very coarse-grained lock in this source file!
@@ -36,14 +36,21 @@
 
 #define HELLO_CMD 0
 #define SETSTATION_CMD 1
+#define REQUEST_CMD 2
 
 #define WELCOME 0
 #define ANNOUNCE 1
 #define INVALID 2
 
+#define ALL 0
+#define CURRENT 1
+#define ALL_STATION 2
+
 #define MAX_STATION_NUM 8
 #define SONG_GROUPS 4
 #define MAX_STATION_SONG_NUM 10
+#define MAX_TOKENS 10
+
 
 typedef struct control
 {
@@ -133,14 +140,66 @@ typedef struct serverinfo
     // to be added..
 }serverinfo_t;
 
+/* global variables */
 serverinfo_t g_server;
 clientinfo_t g_clients[MAX_CLIENT_NUM];
- // TODO: for testing now
 stationlist_t g_station_list;
-pthread_t g_song_threads[1]; // TODO: for testing now, should be array later
 pthread_t g_user; // thread for handling user input
 const char* g_song_files[MAX_CLIENT_NUM];
 
+/* forward declarations */
+char* state_to_string(state_t st);
+void *get_in_addr(struct sockaddr *sa);
+int send_all(int s, char *buf, int *len);
+int read_line(int fd, char data[], int maxlen);
+int build_udpconnection(const char* udp_port, int index);
+int loop_song(station_t* station);
+void* loop_song_thread(void* args);
+void cleanup_files_handler(void* args);
+void init_server_locl();
+void init_clients_info();
+int find_first_client();
+int find_client(int s);
+int init_listen(const char* tcp_port, const char* server_name);
+int send_invalid_command(int s, const char* message);
+int send_welcome(int s);
+int send_announce(int s, const char* buf);
+void send_cur_cong(int s, station_t* station);
+void send_all_station_cur_song(int s);
+void send_station_songs(int s, station_t* station);
+station_t* find_station_from_id(int id);
+void remove_client_from_station(clientinfo_t* client);
+void close_client(int i, fd_set* master);
+void append_client_to_station(clientinfo_t* client, station_t* station);
+int parse_and_send(int s, const char* buf);
+int server_listen(int sockfd);
+int is_directory(const char* path);
+int is_end_mp3(const char* str);
+station_t* alloc_station();
+void push_station_to_list(station_t* stat);
+void spawn_sender(station_t* station);
+int read_song(const char* str, station_t* station);
+int read_song_dir(const char* path, station_t* station);
+void read_station(char* argv[], const int count);
+void print_stations();
+void print_clients();
+void command_helper();
+void* user_input(void* arg);
+void shutdown_all();
+void usage();
+void init_stations();
+void remove_station(station_t* station);
+void release_stations();
+void init_globals();
+
+
+
+
+/*
+ state_to_string: convert the state to string
+ @param st: the state
+ @return: the result string
+ */
 char* state_to_string(state_t st)
 {
     if(st == NO_STATE)
@@ -169,10 +228,10 @@ void *get_in_addr(struct sockaddr *sa)
 
 /*
  send_all: send the message in multiple passes.
- @return: -1 for failure, 0 for success.
  @param s: the socket.
  @param buf: the buffer.
  @param len: the length of the buffer sent.
+ @return: -1 for failure, 0 for success.
  */
 int send_all(int s, char *buf, int *len)
 {
@@ -196,9 +255,9 @@ int send_all(int s, char *buf, int *len)
 
 /*
  read_line: read a total line from socket
- @return: the length in bytes that have been read, or 0 for disconnection and -1 for error
  @param fd: the file descriptor
  @param data: the buffer
+ @return: the length in bytes that have been read, or 0 for disconnection and -1 for error
  */
 int read_line(int fd, char data[], int maxlen)
 {
@@ -280,9 +339,15 @@ int loop_song(station_t* station)
     // Nothing, return
     if(station->song_counter == 0)
         return 0;
+
     // open the first song
     int fd = 0;
     int song_counter = 0;
+    // disable the cancel
+    int old;
+     pthread_cleanup_push(cleanup_files_handler, &fd);
+    pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, &old);
+    /* open and close is cancellation point */
     if((fd = open(station->songs[0], O_RDONLY, 0))<0)
     {
         perror("open");
@@ -292,14 +357,14 @@ int loop_song(station_t* station)
         station->fd = fd;
         station->cur_song = station->songs[song_counter];
     }
-
-    //assert(fd > 0);
     /* one byte one time*/
     struct timeval tm;
 	int time1, time2;
     int num_bytes = 0;
     char buf[BUF_SIZE];
     char* buf_ptr = buf;
+    
+    /* Dangerous here because if the thread is cancelled, */
     while(1)
     {
         int loop = 0;
@@ -310,7 +375,6 @@ int loop_song(station_t* station)
         {
             memset(buf,0,BUF_SIZE);
             int ret = read(fd, buf_ptr, BUF_SIZE);
-            //fprintf(stderr,"aasdasd");
             if(ret < 0)
             {
                 perror("read");
@@ -318,12 +382,10 @@ int loop_song(station_t* station)
             }
             else if(ret == 0)
             {
-                // end of the file, seek to the beginning
-                //lseek(fd, 0, SEEK_SET);
                 // open the next fils
                 close(fd);
+                fd = 0;
                 song_counter = (song_counter+1)%station->song_counter;
-                
                 if((fd = open(station->songs[song_counter], O_RDONLY, 0))<0)
                 {
                     perror("open");
@@ -333,7 +395,7 @@ int loop_song(station_t* station)
                     station->fd = fd;
                     station->cur_song = station->songs[song_counter];
                 }
-                
+                pthread_mutex_lock(&station->lock);
                 for(clientinfo_t* start = station->connected_clients.head_clients; start != NULL; start = start->next_client)
                 {
                     
@@ -345,21 +407,22 @@ int loop_song(station_t* station)
                         perror("sendto");
                     }
                 }
-                
-                /*for(clientinfo_t* start = station->connected_clients.head_clients; start != NULL; start = start->next_client)
+                pthread_mutex_unlock(&station->lock);
+                loop = 16;
+                // send an announce package to clients
+                for(clientinfo_t* start = station->connected_clients.head_clients; start != NULL; start = start->next_client)
                 {
                     
                     assert(start->state == HANDSHAKED);
-                    assert(start->udp_sock != 0);
-                    if ((num_bytes = sendto(start->udp_sock, buf_ptr, ret, 0,
-                                            start->udp_addrinfo->ai_addr, start->udp_addrinfo->ai_addrlen)) == -1) {
-                        perror("sendto");
-                    }
-                }*/
-                loop = 16;
+                    assert(start->socket != 0);
+                    char tmp_buf[BUF_SIZE];
+                    char* tmp_buf_ptr = tmp_buf;
+                    snprintf(tmp_buf_ptr, BUF_SIZE,"Next song:%s",station->cur_song);
+                    send_announce(start->socket,tmp_buf_ptr);
+                }
                 continue;
             }
-            //pthread_mutex_lock(&station->lock);
+            pthread_mutex_lock(&station->lock);
             for(clientinfo_t* start = station->connected_clients.head_clients; start != NULL; start = start->next_client)
             {
                 
@@ -371,19 +434,34 @@ int loop_song(station_t* station)
                     perror("sendto");
                 }
             }
-            //pthread_mutex_unlock(&station->lock);
+            pthread_mutex_unlock(&station->lock);
             loop++;
         }
         loop  = 0;
 		gettimeofday(&tm, NULL);
 		time2 = tm.tv_sec*1000000 + tm.tv_usec ;
 		int time_elapsed = time2 - time1;
-		if(time_elapsed <= 1000000){
+		if(time_elapsed <= 1000000)
+        {
 			//printf("Sleep\n");
 			usleep(1000000 - time_elapsed);
 		}
+        pthread_testcancel();
     }
+    pthread_cleanup_pop(0);
     return 0;
+}
+
+/*
+ cleanup_handler: the cleanup handler, mainly for closing the file
+ */
+void cleanup_files_handler(void* args)
+{
+    // TODO: here I'm not sure whether the fd is closed or not, is there a good way to tell that?
+    
+    int fd = *((int*)args);
+    if(fd != 0)
+        close(fd);
 }
 
 /*
@@ -392,8 +470,10 @@ int loop_song(station_t* station)
  */
 void* loop_song_thread(void* args)
 {
-    // TODO: currently responsible for only one station
-    // TODO: use event-driven select
+    // explicitly set the cancellation type to be deferred (though it's default)
+    int old_type;
+    pthread_setcancelstate(PTHREAD_CANCEL_DEFERRED, &old_type);
+    
     station_t* station = (station_t*)args;
     assert(station);
     loop_song(station);
@@ -409,7 +489,6 @@ void init_server_locl()
     g_server.cur_station = 1;
     
     // to be added
-    
 }
 
 /*
@@ -587,19 +666,87 @@ int send_welcome(int s)
 }
 
 /*
- send_announce: send announce package to one client
+ send_invalid_command: send the announce command to one client
+ @return: if succeed, return 0, else return -1
+ @param s: the socket
+ @parem message: the message
  */
-// TODO
-int send_announce(int s, const char* buf)
+int send_announce(int s, const char* message)
 {
-    /*Announce_t an = {(uint8_t)(WELCOME), (uint16_t)(0)};
-    int len = sizeof(Welcome_t);
-    if((send_all(s, &wel, &len)))
+    announce_t announce;
+    announce.reply_type = ANNOUNCE;
+    announce.songname_size = (uint8_t)(strlen(message));
+    announce.song_name = message;
+    
+    int len_str = (int)strlen(message);
+    int len =sizeof(uint8_t)*2+ len_str+1;
+    char* buf = (char*)malloc(len);
+    if(buf == NULL)
     {
+        fprintf(stderr, "malloc failed!\n");
+        exit(EXIT_FAILURE);
+    }
+    char* rbuf = buf;
+    memcpy(buf, &announce.reply_type, sizeof(uint8_t));
+    buf++;
+    memcpy(buf, &announce.songname_size, sizeof(uint8_t));
+    buf++;
+    
+    memcpy(buf, message, len_str);
+    buf+=len_str;
+    *buf = '\n';
+    if(send_all(s, rbuf, &len) == -1)
+    {
+        free(rbuf);
         perror("send");
         return -1;
-    }*/
+    }
+    free(rbuf);
     return 0;
+}
+
+/*
+ send_single_song: send the current song of the requested client's station.
+ @param s: the socket
+ @param station: the client's station
+ */
+void send_cur_cong(int s, station_t* station)
+{
+    assert(station);
+    send_announce(s, station->cur_song);
+}
+
+/*
+ send_all_station_cur_cong: send the current song
+ @param s: the socket
+ */
+void send_all_station_cur_song(int s)
+{
+    station_t* st = g_station_list.head_station;
+    int i = 0;
+    while(st != NULL)
+    {
+        char buf[BUF_SIZE];
+        snprintf(buf, BUF_SIZE, "station[%d]:%s",i,st->cur_song);
+        char* buf_ptr = buf;
+        send_announce(s, buf_ptr);
+        st = st->next_station;
+        i++;
+    }
+}
+
+/*
+ send_station_songs: send the specified station's all songs
+ @param s: the socket
+ @param station: the client's station
+ */
+void send_station_songs(int s, station_t* station)
+{
+    assert(station);
+    for(int i = 0; i < station->song_counter; i++)
+    {
+        send_announce(s, station->songs[i]);
+    }
 }
 
 /*
@@ -615,6 +762,7 @@ station_t* find_station_from_id(int id)
     {
         if(st->id == id)
         {
+            pthread_mutex_unlock(&g_station_list.lock);
             return st;
         }else
         {
@@ -685,6 +833,9 @@ void close_client(int i, fd_set* master)
     assert(i>=0 && i < MAX_CLIENT_NUM);
     assert(g_clients[i].socket != 0);
     close(g_clients[i].socket); // bye!
+    assert(g_clients[i].udp_sock != 0);
+    close(g_clients[i].udp_sock);
+    
     FD_CLR(g_clients[i].socket, master); // remove from master set
     // also need to remove the client from the station
     remove_client_from_station(&g_clients[i]);
@@ -729,15 +880,10 @@ void append_client_to_station(clientinfo_t* client, station_t* station)
  */
 int parse_and_send(int s, const char* buf)
 {
-#ifdef DEBUG
-    //fprintf(stderr, "Client data: %s\n", buf);
-#endif
-    // Do nothing if the buffer is empty
     if(buf == NULL)
         return 0;
     
     uint8_t cmd = *((uint8_t*)buf);
-    //Control_t td;
     
     buf++;
     if(cmd == HELLO_CMD)
@@ -756,7 +902,6 @@ int parse_and_send(int s, const char* buf)
             {
                 return -1;
             }
-            //send_welcome(s);
         }else
         {
             // send welcome
@@ -782,8 +927,6 @@ int parse_and_send(int s, const char* buf)
                     fprintf(stdout, "snowcast_server: done!\n");
                     g_clients[index].udp_port = port;
                 }
-                //fputs("%%",stdout);
-                //fflush(stdout);
             }
         }
     }else if(cmd == SETSTATION_CMD)
@@ -809,12 +952,11 @@ int parse_and_send(int s, const char* buf)
         
         fprintf(stdout, "I get [Set %d].\n", station_num);
         
-        //pthread_mutex_lock(&g_station_list.lock);
+        pthread_mutex_lock(&g_station_list.lock);
         if(station_num < 0 || station_num >= g_station_list.counter)
         {
-            //pthread_mutex_unlock(&g_station_list.lock);
-            send_invalid_command(s, "Invalid station number.");
             pthread_mutex_unlock(&g_station_list.lock);
+            send_invalid_command(s, "Invalid station number.");
         }
         else
         {
@@ -834,8 +976,71 @@ int parse_and_send(int s, const char* buf)
                 remove_client_from_station(&g_clients[index]);
             }
             append_client_to_station(&g_clients[index], target);
+            
+            // send an announcement to
+            
+            send_announce(g_clients[index].socket, "Set Station Confirmed");
+            send_announce(g_clients[index].socket, g_clients[index].cur_station->cur_song);
         }
-    
+    }
+    else if(cmd == REQUEST_CMD)
+    {
+        
+        uint8_t* tmp = (uint8_t*)buf;
+        uint8_t req_type = (*tmp);
+        
+        if(req_type == ALL)
+        {
+            int index = find_client(s);
+            if(g_clients[index].state == INIT_STATE)
+            {
+                if(send_invalid_command(s, "Not yet hand shaked.") == -1)
+                {
+                    return -1;
+                }
+            }
+            if(g_clients[index].cur_station == NULL)
+            {
+                if(send_invalid_command(s, "Not yet set station.") == -1)
+                {
+                    return -1;
+                }
+            }
+            else
+            {
+                send_announce(s, "Request Confirmed");
+                send_station_songs(s, g_clients[index].cur_station);
+            }
+        }else if(req_type == CURRENT)
+        {
+            int index = find_client(s);
+            if(g_clients[index].state == INIT_STATE)
+            {
+                if(send_invalid_command(s, "Not yet hand shaked.") == -1)
+                {
+                    return -1;
+                }
+            }
+            if(g_clients[index].cur_station == NULL)
+            {
+                if(send_invalid_command(s, "Not yet set station.") == -1)
+                {
+                    return -1;
+                }
+            }
+            else
+            {
+                send_announce(s, "Request Confirmed");
+                send_cur_cong(s,g_clients[index].cur_station );
+            }
+        }else if(req_type == ALL_STATION)
+        {
+            send_announce(s, "Request Confirmed");
+            send_all_station_cur_song(s);
+        }else
+        {
+            assert(0);
+        }
     }
     return 0;
 }
@@ -873,19 +1078,18 @@ int server_listen(int sockfd)
 	while(1)
     {
 		read_fds = master; // copy it. the reason is that we need to reset the set once we do select.
+        
 		if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1)
 		{
 			perror("select");
 			return -1;
 		}
-		// run through the existing connections looking for data to read
 		for(i = 0; i <= fdmax; i++)
 		{
 			if (FD_ISSET(i, &read_fds))
 			{ // we got one!!
 				if (i == sockfd)
 				{
-                    //fflush(stdout);
 					// handle new connections
 					addrlen = sizeof(remoteaddr);
 					int newfd = accept(sockfd,
@@ -930,12 +1134,23 @@ int server_listen(int sockfd)
 					{
                         int index = find_client(i);
 						// got error or connection closed by client
-                        
 						if (nbytes == 0)
 						{
 							// connection closed
                             fprintf(stdout, "\nsnowcast_server: disconnected from %s \n", g_clients[index].ip_address);
                             fprintf(stdout,"snowcast_server: socket %d hung up\n", i);
+                            
+                            /* Need to send the listner of the client a signal to stop */
+                            clientinfo_t* cl = &g_clients[index];
+                            //close(cl->udp_sock);
+                            char buf[BUF_SIZE];
+                            char* buf_ptr = buf;
+                            strcpy(buf_ptr, "STOP");
+                            int num_bytes = 0;
+                            if ((num_bytes = sendto(cl->udp_sock, buf_ptr, 4, 0,
+                                                    cl->udp_addrinfo->ai_addr, cl->udp_addrinfo->ai_addrlen)) == -1) {
+                                perror("sendto");
+                            }
                             
                         } else
 						{
@@ -968,7 +1183,6 @@ int is_directory(const char* path)
         exit(EXIT_FAILURE);
     }else if(S_ISDIR(statbuf.st_mode) == 1)
     {
-        // ignore hidden files
         return 1;
     }else
     {
@@ -977,6 +1191,11 @@ int is_directory(const char* path)
     return 0;
 }
 
+/*
+ is_end_mp3: check if the string is ended with mp3
+ @param str: the string
+ @return: 1 for mp3 and 0 for not
+ */
 int is_end_mp3(const char* str)
 {
     if(str == 0 || strlen(str) <= 4)
@@ -1006,7 +1225,6 @@ station_t* alloc_station()
     return station;
 }
 
-
 /*
  push_station_to_list: push the new station to the list
  */
@@ -1016,7 +1234,6 @@ void push_station_to_list(station_t* stat)
     
     assert(stat);
     // walk through the list
-    
     int next_available = 0;
     station_t* station = g_station_list.head_station;
     while(station != NULL)
@@ -1109,9 +1326,8 @@ int read_song_dir(const char* path, station_t* station)
             continue;
         else
         {
-            if(dirp->d_name[0] == '.')
+            if(dirp->d_name[0] == '.')// ignore hidden files
             {
-                // ignore hidden files
                 continue;
             }
             strcpy(ptr, dirp->d_name);
@@ -1185,20 +1401,24 @@ void read_station(char* argv[], const int count)
  */
 void print_stations()
 {
-    //pthread_mutex_lock(&g_station_list.lock);
+    pthread_mutex_lock(&g_station_list.lock);
     station_t* start = g_station_list.head_station;
     if(start == NULL)
     {
+        assert(g_station_list.counter == 0);
+         fprintf(stdout, "There are %d stations.\n", g_station_list.counter);
         fprintf(stdout, "Empty!\n");
         pthread_mutex_unlock(&g_station_list.lock);
         return;
     }
     
+    assert(g_station_list.counter > 0);
+    fprintf(stdout, "There are %d stations.\n", g_station_list.counter);
     while(start != NULL)
     {
         
         // TODO: Deadlock happens here, why?
-        //pthread_mutex_lock(&start->lock);
+        pthread_mutex_lock(&start->lock);
 
         for(int i= 0; i < start->song_counter; i++)
         {
@@ -1212,10 +1432,10 @@ void print_stations()
             fprintf(stdout, "station[%d]: clients[%s:%d]\n", start->id, c->ip_address, c->udp_port);
             c = c->next_client;
         }
-        //pthread_mutex_unlock(&start->lock);
+        pthread_mutex_unlock(&start->lock);
         start = start->next_station;
     }
-    //pthread_mutex_unlock(&g_station_list.lock);
+    pthread_mutex_unlock(&g_station_list.lock);
 }
 
 /*
@@ -1239,6 +1459,9 @@ void print_clients()
     }
 }
 
+/*
+ command_helper: show the help manual.
+ */
 void command_helper()
 {
     fprintf(stdout, "\n*************************************\n");
@@ -1267,47 +1490,65 @@ void* user_input(void* arg)
         if(len > 0 && user_input[len-1] == '\n')
             user_input[len-1] = '\0';
         len = strlen(user_input);
-        if(len != 1)
+        /*if(len != 1)
+         {
+         fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
+         continue;
+         }
+         else
+         {*/
+        switch(user_input[0])
         {
-            fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
-            continue;
-        }
-        else
-        {
-            switch(user_input[0])
+            case 'h':
             {
-                case 'h':
+                if(len != 1)
                 {
-                    /*fprintf(stdout, "l: print all stations.\n");
-                    fprintf(stdout, "c: print all connected clients.\n");
-                    fprintf(stdout, "q: exit.\n");*/
-                    command_helper();
-                    break;
-                }
-                case 'p':
-                {
-                    break;
-                }
-                case 'q':
-                {
-                    exit(0);
-                    break;
-                }
-                case 'l':
-                {
-                    print_stations();
-                    break;
-                }
-                case 'c':
-                {
-                    print_clients();
-                    break;
-                }
-                default:
-                {
-                    fprintf(stdout, "Ambiguous command. Help for 'h'.\n");
+                    fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
                     continue;
                 }
+                command_helper();
+                break;
+            }
+            case 'q':
+            {
+                if(len != 1)
+                {
+                    fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
+                    continue;
+                }
+                release_stations();
+                print_stations();
+                break;
+            }
+            case 'l':
+            {
+                if(len != 1)
+                {
+                    fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
+                    continue;
+                }
+                print_stations();
+                break;
+            }
+            case 'c':
+            {
+                if(len != 1)
+                {
+                    fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
+                    continue;
+                }
+                print_clients();
+                break;
+            }
+            case 'a':
+            {
+                
+                break;
+            }
+            default:
+            {
+                fprintf(stdout, "Ambiguous command. Help for 'h'.\n");
+                continue;
             }
         }
     }
@@ -1336,28 +1577,113 @@ void init_stations()
     memset(&g_station_list, 0, sizeof(g_station_list));
     pthread_mutex_init(&g_station_list.lock, NULL);
 }
+
+/*
+ remove_station: remove the specified station
+ */
+// NEED REVIEW
+void remove_station(station_t* station)
+{
+    assert(station);
+    
+    // lock the stations
+    int find = 0;
+    pthread_mutex_lock(&g_station_list.lock);
+    
+    station_t* st = g_station_list.head_station;
+    if(station == st) // delete head
+    {
+        find = 1;
+        /* CAUTION: I use pthread_cancel, I need to take care of the cancel point */
+        pthread_cancel(station->sender);
+        pthread_mutex_lock(&station->lock);
+        for(int i = 0; i < station->song_counter; i++)
+        {
+            free((void*)station->songs[i]);
+        }
+        pthread_mutex_unlock(&station->lock);
+        pthread_mutex_destroy(&station->lock);
+        g_station_list.counter--;
+        if(g_station_list.counter == 0)
+        {
+            g_station_list.head_station = NULL;
+            g_station_list.tail_station = NULL;
+        }
+        free(station);
+    }
+    else
+    {
+        while(st->next_station != NULL)
+        {
+            if(st->next_station == station)
+            {
+                find = 1;
+                /* CAUTION: I use pthread_cancel, I need to take care of the cancel point */
+                pthread_cancel(station->sender);
+                pthread_mutex_lock(&station->lock);
+                for(int i = 0; i < station->song_counter; i++)
+                {
+                    free((void*)station->songs[i]);
+                }
+                pthread_mutex_unlock(&station->lock);
+                pthread_mutex_destroy(&station->lock);
+                g_station_list.counter--;
+                st->next_station = station->next_station;
+                if(st->next_station == NULL)
+                {
+                    g_station_list.tail_station = st;
+                }
+                free(station);
+                break;
+            }
+            else
+            {
+                st = st->next_station;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_station_list.lock);
+    assert(find);
+}
+
 /*
  release_stations: wait for song threads to end
  */
 // NEED REVIEW, CONCERNS ABOUT LOCK
 void release_stations()
 {
-    int ret;
-    pthread_join(g_song_threads[0], (void*)(&ret));
-    
+    // cancel all threads
+    pthread_mutex_lock(&g_station_list.lock);
     station_t* start = g_station_list.head_station;
     while(start != NULL)
     {
+        /* CAUTION: I use pthread_cancel, I need to take care of the cancel point */
+        pthread_cancel(start->sender);
+        start = start->next_station;
+    }
+
+    start = g_station_list.head_station;
+    while(start != NULL)
+    {
+        station_t* next = start->next_station;
+        pthread_mutex_lock(&start->lock);
         for(int i = 0; i < start->song_counter; i++)
         {
             free((void*)start->songs[i]);
         }
+        pthread_mutex_unlock(&start->lock);
+
         pthread_mutex_destroy(&start->lock);
-        start = start->next_station;
+        free(start);
+        g_station_list.counter--;
+        start = next;
     }
-    
+    pthread_mutex_unlock(&g_station_list.lock);
     // release the mutex
     pthread_mutex_destroy(&g_station_list.lock);
+    assert(g_station_list.counter == 0);
+    g_station_list.head_station = NULL;
+    g_station_list.tail_station = NULL;
 }
 
 /*
@@ -1373,7 +1699,7 @@ void init_globals()
 
 int main(int argc, char* argv[])
 {
-    //printf("%d",'\n');
+    close(1000);
     const char* tcp_port;
 	if(argc < 3)
 	{
@@ -1386,9 +1712,7 @@ int main(int argc, char* argv[])
 	}
 
     int socket = 0;
-    /*
-    bind the listner socket
-     */
+
     if((socket = init_listen(tcp_port, NULL)) < 0)
     {
         fprintf(stderr, "error binding socket.\n");
@@ -1399,17 +1723,19 @@ int main(int argc, char* argv[])
     read_station(&argv[2],argc-2);
     // create the thread for user input
     pthread_create(&g_user, NULL, user_input, NULL);
-    //print_stations();
     
     if(server_listen(socket) == -1)
     {
         fprintf(stderr, "error in server.");
         exit(1);
     }
+    // join user thread
     void*ret = NULL;
     pthread_join(g_user, ret);
     
     close(socket);
     release_stations();
+    
+    pthread_exit(0);
 	return 0;
 }
