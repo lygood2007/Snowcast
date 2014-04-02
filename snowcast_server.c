@@ -133,15 +133,14 @@ typedef struct stationlist
     pthread_mutex_t lock;
     
 }stationlist_t;
-
+/*
 typedef struct serverinfo
 {
     int cur_station;
     // to be added..
 }serverinfo_t;
-
+*/
 /* global variables */
-serverinfo_t g_server;
 clientinfo_t g_clients[MAX_CLIENT_NUM];
 stationlist_t g_station_list;
 pthread_t g_user; // thread for handling user input
@@ -164,7 +163,7 @@ int init_listen(const char* tcp_port, const char* server_name);
 int send_invalid_command(int s, const char* message);
 int send_welcome(int s);
 int send_announce(int s, const char* buf);
-void send_cur_cong(int s, station_t* station);
+void send_cur_song(int s, station_t* station);
 void send_all_station_cur_song(int s);
 void send_station_songs(int s, station_t* station);
 station_t* find_station_from_id(int id);
@@ -417,7 +416,7 @@ int loop_song(station_t* station)
                     assert(start->socket != 0);
                     char tmp_buf[BUF_SIZE];
                     char* tmp_buf_ptr = tmp_buf;
-                    snprintf(tmp_buf_ptr, BUF_SIZE,"Next song:%s",station->cur_song);
+                    sprintf(tmp_buf_ptr, "Next song:%s",station->cur_song);
                     send_announce(start->socket,tmp_buf_ptr);
                 }
                 continue;
@@ -478,17 +477,6 @@ void* loop_song_thread(void* args)
     assert(station);
     loop_song(station);
     return NULL;
-}
-/*
- init_server_local: initialize the local settings of the server
- */
-void init_server_locl()
-{
-    // set the current station
-    memset(&g_server, 0,sizeof(serverinfo_t));
-    g_server.cur_station = 1;
-    
-    // to be added
 }
 
 /*
@@ -710,10 +698,13 @@ int send_announce(int s, const char* message)
  @param s: the socket
  @param station: the client's station
  */
-void send_cur_cong(int s, station_t* station)
+void send_cur_song(int s, station_t* station)
 {
     assert(station);
-    send_announce(s, station->cur_song);
+    char buf[BUF_SIZE];
+    char* buf_ptr = buf;
+    sprintf(buf_ptr, "current playing: %s", station->cur_song);
+    send_announce(s, buf_ptr);
 }
 
 /*
@@ -727,7 +718,7 @@ void send_all_station_cur_song(int s)
     while(st != NULL)
     {
         char buf[BUF_SIZE];
-        snprintf(buf, BUF_SIZE, "station[%d]:%s",i,st->cur_song);
+        sprintf(buf, "station[%d]:%s",i,st->cur_song);
         char* buf_ptr = buf;
         send_announce(s, buf_ptr);
         st = st->next_station;
@@ -841,6 +832,7 @@ void close_client(int i, fd_set* master)
     remove_client_from_station(&g_clients[i]);
     
     memset(&g_clients[i], 0, sizeof(clientinfo_t));
+    assert(g_clients[i].state == NO_STATE);
 }
 /*
  append_client_to_station: append the client to the destination station
@@ -949,9 +941,9 @@ int parse_and_send(int s, const char* buf)
         uint16_t station_num = (uint16_t)ntohs(*tmp);
         
         sprintf(station_ptr, "%d", (int)station_num);
-        
+#ifdef DEBUG
         fprintf(stdout, "I get [Set %d].\n", station_num);
-        
+#endif
         pthread_mutex_lock(&g_station_list.lock);
         if(station_num < 0 || station_num >= g_station_list.counter)
         {
@@ -980,7 +972,7 @@ int parse_and_send(int s, const char* buf)
             // send an announcement to
             
             send_announce(g_clients[index].socket, "Set Station Confirmed");
-            send_announce(g_clients[index].socket, g_clients[index].cur_station->cur_song);
+            send_cur_song(s,g_clients[index].cur_station );
         }
     }
     else if(cmd == REQUEST_CMD)
@@ -1031,7 +1023,7 @@ int parse_and_send(int s, const char* buf)
             else
             {
                 send_announce(s, "Request Confirmed");
-                send_cur_cong(s,g_clients[index].cur_station );
+                send_cur_song(s,g_clients[index].cur_station );
             }
         }else if(req_type == ALL_STATION)
         {
@@ -1354,6 +1346,43 @@ int read_song_dir(const char* path, station_t* station)
     return 0;
 }
 
+/*
+ add_station: add the station to the server
+ @param file: the target file
+ */
+void add_station(char* file)
+{
+    // add a new station from file/directory
+    pthread_mutex_lock(&g_station_list.lock);
+    if(g_station_list.counter == MAX_STATION_NUM)
+    {
+        pthread_mutex_unlock(&g_station_list.lock);
+        fprintf(stderr, "Error: you are trying to add %s but the server is full.\n", file);
+        return;
+    }
+    pthread_mutex_unlock(&g_station_list.lock);
+    station_t* new_station = alloc_station();
+    assert(new_station);
+    
+    if(is_end_mp3(file))
+    {
+        read_song(file, new_station);
+    }
+    else if(is_directory(file))
+    {
+        read_song_dir(file, new_station);
+    }
+    
+    if(new_station->song_counter == 0)
+        free(new_station);
+    else
+    {
+        push_station_to_list(new_station);
+        // spawn a new sender thread for the station
+        spawn_sender(new_station);
+        fprintf(stdout, "Added station %s successfully.\n",file);
+    }
+}
 
 /*
  read_station: the helper function for reading the directory
@@ -1364,35 +1393,7 @@ void read_station(char* argv[], const int count)
 {
     for(int i = 0; i < count; i++)
     {
-        pthread_mutex_lock(&g_station_list.lock);
-        {
-            if(g_station_list.counter == MAX_STATION_NUM)
-            {
-                pthread_mutex_unlock(&g_station_list.lock);
-                return;
-            }
-        }
-        pthread_mutex_unlock(&g_station_list.lock);
-        station_t* new_station = alloc_station();
-        assert(new_station);
-        
-        if(is_end_mp3(argv[i]))
-        {
-            read_song(argv[i], new_station);
-        }
-        else if(is_directory(argv[i]))
-        {
-            read_song_dir(argv[i], new_station);
-        }
-        
-        if(new_station->song_counter == 0)
-            free(new_station);
-        else
-        {
-            push_station_to_list(new_station);
-            // spawn a new sender thread for the station
-            spawn_sender(new_station);
-        }
+        add_station(argv[i]);
     }
 }
 
@@ -1464,13 +1465,13 @@ void print_clients()
  */
 void command_helper()
 {
-    fprintf(stdout, "\n*************************************\n");
-    fprintf(stdout, "****************manual***************\n");
-    fprintf(stdout, "/*************************************\n");
+    fprintf(stdout, "\n********************************************\n");
+    fprintf(stdout, "****************manual**********************\n");
+    //fprintf(stdout, "/*************************************\n");
     fprintf(stdout, "l: list all stations.\n");
     fprintf(stdout, "c: print all clients.\n");
     fprintf(stdout, "q: exit.\n");
-    fprintf(stdout, "**************************************/\n\n");
+    fprintf(stdout, "********************************************\n\n");
 }
 
 /*
@@ -1490,13 +1491,17 @@ void* user_input(void* arg)
         if(len > 0 && user_input[len-1] == '\n')
             user_input[len-1] = '\0';
         len = strlen(user_input);
-        /*if(len != 1)
-         {
-         fprintf(stderr, "Ambiguous command. Help for 'h'.\n");
-         continue;
-         }
-         else
-         {*/
+        char * pch;
+        pch = strtok (user_input," \t");
+        char* tokens[MAX_TOKENS];
+        int num = 0;
+        while (pch != NULL)
+        {
+            if(num == MAX_TOKENS)
+                break;
+            tokens[num++] = pch;
+            pch = strtok (NULL, " \t");
+        };
         switch(user_input[0])
         {
             case 'h':
@@ -1542,7 +1547,20 @@ void* user_input(void* arg)
             }
             case 'a':
             {
-                
+                if(strcmp(tokens[0], "a") != 0 || num != 2)
+                {
+                    fprintf(stderr, "Ambiguous input.\n");
+                    continue;
+                }
+                add_station(tokens[1]);
+                // send an anouncement to all clients
+                for(int i = 0; i < MAX_CLIENT_NUM; i++)
+                {
+                    if(g_clients[i].state == HANDSHAKED)
+                    {
+                        send_announce(g_clients[i].socket, "New station is added.");
+                    }
+                }
                 break;
             }
             default:
@@ -1576,6 +1594,8 @@ void init_stations()
     // set the station list to be zero
     memset(&g_station_list, 0, sizeof(g_station_list));
     pthread_mutex_init(&g_station_list.lock, NULL);
+    // print an anouncement
+    fprintf(stdout, "\n/**The server can have at most %d stations.**/\n",MAX_STATION_NUM);
 }
 
 /*
@@ -1691,7 +1711,6 @@ void release_stations()
  */
 void init_globals()
 {
-    init_server_locl();
     init_clients_info();
     init_stations();
     command_helper();

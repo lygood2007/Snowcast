@@ -274,29 +274,29 @@ int parse_and_send(int s, char* buf)
         return 0;
     }else if(num == 1)
     {
-        if(strncmp(tokens[0], "Exit",4) == 0)
+        if(strcmp(tokens[0], "Exit") == 0)
         {
             fprintf(stdout, "Thanks for using snowcast.\n");
             exit(0);
         }
-        else if(strncmp(tokens[0], "Reqall", 6) == 0)
+        else if(strcmp(tokens[0], "Reqall") == 0)
         {
             // request all stations' current playing song
             send_request(s, ALL);
         }
-        else if(strncmp(tokens[0], "Reqast",6) == 0)
+        else if(strcmp(tokens[0], "Reqast") == 0)
         {
             // TODO
             send_request(s, ALL_STATION);
         }
-        else if(strncmp(tokens[0], "Reqcur",6) == 0)
+        else if(strcmp(tokens[0], "Reqcur") == 0)
         {
             // TODO
             send_request(s, CURRENT);
         }
     }else
     {
-        if(strncmp(tokens[0], "Set",3 ) == 0)
+        if(strcmp(tokens[0], "Set") == 0)
         {
             if(num != 2)
             {
